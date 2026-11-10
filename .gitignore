@@ -1,0 +1,15 @@
+# Local Python environment and test caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Supplied application packages and derived reports are local-only.
+*.apk
+!releases/IdleArc-DruidHelper-*.apk
+*.apks
+*.aab
+*.xapk
+IdleArc_APK*.zip
+incoming/
+reports/
