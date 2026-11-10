@@ -136,9 +136,38 @@ public class DruidKnowledgeBase {
 
     public static String normalizeForMatch(String s) {
         if (s == null) return "";
-        return s.toLowerCase(Locale.ROOT)
+        String low = s.toLowerCase(Locale.ROOT)
                 .replace('ё', 'е')
-                .replace('6', 'б')
+                .replace('a', 'а')
+                .replace('b', 'в')
+                .replace('c', 'с')
+                .replace('e', 'е')
+                .replace('h', 'н')
+                .replace('k', 'к')
+                .replace('m', 'м')
+                .replace('n', 'п')
+                .replace('o', 'о')
+                .replace('p', 'р')
+                .replace('t', 'т')
+                .replace('u', 'и')
+                .replace('x', 'х')
+                .replace('y', 'у');
+        // Исправляем цифры-двойники ТОЛЬКО внутри русских слов (не трогая роллы +28.5%, 5/5, A6 и т.д.)
+        StringBuilder sb = new StringBuilder(low.length());
+        for (int i = 0; i < low.length(); i++) {
+            char ch = low.charAt(i);
+            boolean prevCyr = i > 0 && low.charAt(i - 1) >= 'а' && low.charAt(i - 1) <= 'я';
+            boolean nextCyr = i + 1 < low.length() && low.charAt(i + 1) >= 'а' && low.charAt(i + 1) <= 'я';
+            if (ch == '6' && (prevCyr || nextCyr)) {
+                ch = 'б';
+            } else if (ch == '0' && prevCyr && nextCyr) {
+                ch = 'о';
+            } else if (ch == '3' && (prevCyr || nextCyr) && !(i > 0 && low.charAt(i - 1) == '+')) {
+                ch = 'з';
+            }
+            sb.append(ch);
+        }
+        return sb.toString()
                 .replaceAll("[^а-яa-z0-9%+.]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();

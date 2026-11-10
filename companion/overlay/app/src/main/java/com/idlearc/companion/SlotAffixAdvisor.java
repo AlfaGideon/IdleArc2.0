@@ -256,61 +256,211 @@ public class SlotAffixAdvisor {
     }
 
     /**
+     * Определяет тип слота по строкам активного модального окна (с учётом яркости переднего плана
+     * и точной позиции заголовка секции «Аффиксы X/5»).
+     */
+    public static GearSlot detectSlotFromModalLines(List<IdleArcOcrEngine.OcrLine> ocrLines) {
+        if (ocrLines == null || ocrLines.isEmpty()) return null;
+        List<IdleArcOcrEngine.OcrLine> fg = IdleArcOcrEngine.isolateActiveModalLines(ocrLines);
+        List<String> texts = new ArrayList<>(fg.size());
+        for (IdleArcOcrEngine.OcrLine l : fg) {
+            texts.add(l.text);
+        }
+        return detectSlotFromLines(texts);
+    }
+
+    /**
      * Определяет тип слота предмета по распознанному OCR-тексту карточки предмета / Кузницы.
      * Возвращает null, если тип слота по тексту однозначно не распознан.
      */
     public static GearSlot detectSlotFromLines(List<String> lines) {
         if (lines == null || lines.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder();
-        // Первые строки модалки содержат название предмета и подтип слота — даём им приоритет
-        for (int i = 0; i < Math.min(lines.size(), 8); i++) {
-            sb.append(lines.get(i)).append(' ');
-        }
-        String head = DruidKnowledgeBase.normalizeForMatch(sb.toString());
 
         StringBuilder fullSb = new StringBuilder();
         for (String l : lines) fullSb.append(l).append(' ');
         String all = DruidKnowledgeBase.normalizeForMatch(fullSb.toString());
 
-        if (head.contains("талисман") || all.contains("сила атаки талисмана") || all.contains("бонусы жертв")) {
+        // 1. Локализуем шапку открытого предмета: строки непосредственно НАД заголовком «Аффиксы X/5»
+        // (даже если над модалкой попали строки фонового экрана и карточка начинается на 9..15 строке!)
+        int affixHdrIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
+        int winStart;
+        int winEnd;
+        if (affixHdrIdx > 0) {
+            winStart = Math.max(0, affixHdrIdx - 10);
+            winEnd = affixHdrIdx;
+        } else {
+            winStart = 0;
+            winEnd = Math.min(lines.size(), 16);
+            // Останавливаемся перед «Бонус добычи» / «Гнёзда», чтобы названия бонусов добычи не мешали шапке
+            for (int i = 0; i < winEnd; i++) {
+                String low = DruidKnowledgeBase.normalizeForMatch(lines.get(i));
+                if (low.startsWith("бонус добычи") || low.startsWith("гнезд") || low.startsWith("гнёзд")) {
+                    winEnd = i;
+                    break;
+                }
+            }
+        }
+
+        StringBuilder headSb = new StringBuilder();
+        for (int i = winStart; i < winEnd; i++) {
+            String raw = lines.get(i).trim();
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            // Исключаем строки вторичных/врождённых статов с '+', чтобы "+Шанс двойного удара" или "+Сила" не влияли на слот
+            if (raw.startsWith("+") || low.contains("шанс двойного") || low.contains("крит.") || low.contains("уклонен")) {
+                continue;
+            }
+            headSb.append(low).append(' ');
+        }
+        String head = headSb.toString().trim();
+
+        // Питомцы и Талисманы (уникальные окна со своими механиками)
+        if (hasStem(head, "талисман") || all.contains("сила атаки талисмана") || all.contains("бонусы жертв")) {
             return GearSlot.TALISMAN;
         }
-        if (head.contains("факел") || all.contains("второй руки") || all.contains("жажды крови")) {
-            return GearSlot.TORCH;
-        }
-        if (head.contains("посох") || head.contains("палочк") || head.contains("когти")
-                || head.contains("книга заклинаний") || head.contains("клинок") || head.contains("меч")
-                || head.contains("лук") || head.contains("арбалет") || head.contains("коса")
-                || head.contains("двуручн") || head.contains("оружие")) {
-            return GearSlot.WEAPON;
-        }
-        if (head.contains("перчатк") || head.contains("обмотк") || head.contains("хватк") || head.contains("рукавиц")) {
-            return GearSlot.GLOVES;
-        }
-        if (head.contains("сапог") || head.contains("ботинк") || head.contains("сандал") || head.contains("быстрого шага")) {
-            return GearSlot.BOOTS;
-        }
-        if (head.contains("пояс") || head.contains("ремен")) {
-            return GearSlot.BELT;
-        }
-        if (head.contains("амулет") || head.contains("ожерел") || head.contains("кулон")) {
-            return GearSlot.AMULET;
-        }
-        if (head.contains("кольц") || head.contains("перстен")) {
-            return GearSlot.RING;
-        }
-        if (head.contains("шлем") || head.contains("капюшон") || head.contains("корона")
-                || head.contains("диадем") || head.contains("шапк") || head.contains("тыкв")) {
-            return GearSlot.HELMET;
-        }
-        if (head.contains("брон") || head.contains("кирас") || head.contains("доспех")
-                || head.contains("нагруд") || head.contains("жилет") || head.contains("манти") || head.contains("шкура")) {
-            return GearSlot.CHEST;
-        }
-        if (all.contains("осколки питомцев") || all.contains("особый бонус") || all.contains("слияние")) {
+        if (all.contains("осколки питомцев") || all.contains("особый бонус")
+                || all.contains("эволюция питомца") || (all.contains("слияние") && all.contains("питом"))) {
             return GearSlot.PET;
         }
+
+        // Проход А: точные подзаголовки категории слота в карточке IdleArc («Сапоги», «Перчатки», «Факел», «Вторая рука» и т.д.)
+        GearSlot exactCategory = matchSlotCategorySubtitle(head);
+        if (exactCategory != null) {
+            return exactCategory;
+        }
+
+        // Проход Б: полный словарь всех 322 русских баз предметов + Хэллоуина из libapp.so
+        GearSlot byBaseName = matchItemBaseDictionary(head);
+        if (byBaseName != null) {
+            return byBaseName;
+        }
+
+        // Если шапка оказалась выше окна (например скролл внутри Кузницы), проверяем верхние не-статовые строки
+        if (winStart > 0) {
+            StringBuilder topSb = new StringBuilder();
+            for (int i = 0; i < winStart; i++) {
+                String raw = lines.get(i).trim();
+                if (!raw.startsWith("+")) {
+                    topSb.append(DruidKnowledgeBase.normalizeForMatch(raw)).append(' ');
+                }
+            }
+            String top = topSb.toString().trim();
+            GearSlot fromTop = matchSlotCategorySubtitle(top);
+            if (fromTop != null) return fromTop;
+            fromTop = matchItemBaseDictionary(top);
+            if (fromTop != null) return fromTop;
+        }
+
+        // Уникальный вторичный аффикс Факела («Жажда крови») существует ТОЛЬКО на Факеле
+        if (all.contains("жажда крови") || all.contains("жажды крови")) {
+            return GearSlot.TORCH;
+        }
+
         return null;
+    }
+
+    private static GearSlot matchSlotCategorySubtitle(String h) {
+        if (h == null || h.isEmpty()) return null;
+        if (hasWord(h, "факел") || h.contains("вторая рука") || h.contains("второй руки") || h.contains("левая рука")) {
+            return GearSlot.TORCH;
+        }
+        if (hasWord(h, "перчатки")) return GearSlot.GLOVES;
+        if (hasWord(h, "сапоги")) return GearSlot.BOOTS;
+        if (hasWord(h, "шлем")) return GearSlot.HELMET;
+        if (hasWord(h, "броня") || hasWord(h, "нагрудник")) return GearSlot.CHEST;
+        if (hasWord(h, "пояс")) return GearSlot.BELT;
+        if (hasWord(h, "амулет")) return GearSlot.AMULET;
+        if (hasWord(h, "кольцо")) return GearSlot.RING;
+        if (hasWord(h, "оружие") || hasWord(h, "двуручное") || hasWord(h, "одноручное")) return GearSlot.WEAPON;
+        return null;
+    }
+
+    private static GearSlot matchItemBaseDictionary(String h) {
+        if (h == null || h.isEmpty()) return null;
+        // 1. Вторая рука / Факел (проверяем до оружия)
+        if (hasStem(h, "факел") || h.contains("вторая рука") || h.contains("второй руки")
+                || h.contains("левая рука") || h.contains("книга заклинаний")
+                || hasStem(h, "гримуар") || hasStem(h, "фолиант") || hasStem(h, "колчан")
+                || hasWord(h, "щит") || hasWord(h, "щита")) {
+            return GearSlot.TORCH;
+        }
+        // 2. Оружие (включая «Палка дикого сердца», «Палка древней рощи», «Рунная палка», «Когти Ночной Короны» — до «корона»!)
+        if (hasStem(h, "посох") || hasWord(h, "палка") || hasWord(h, "палки") || hasStem(h, "палочк")
+                || hasStem(h, "жезл") || hasStem(h, "скипетр") || hasStem(h, "когти") || hasStem(h, "когтей")
+                || hasStem(h, "клинок") || hasWord(h, "меч") || hasWord(h, "меча") || hasStem(h, "палаш")
+                || hasStem(h, "сабл") || hasStem(h, "кинжал") || hasWord(h, "лук") || hasStem(h, "арбалет")
+                || hasWord(h, "коса") || hasWord(h, "серп") || hasStem(h, "молот") || hasStem(h, "топор")
+                || hasStem(h, "секир") || hasStem(h, "копь") || hasStem(h, "двуручн") || hasStem(h, "одноручн")
+                || hasWord(h, "оружие")) {
+            return GearSlot.WEAPON;
+        }
+        // 3. Перчатки («Симбиотические Обмотки», «Хватка Берсерка», «Стальные латные рукавицы», «Перчатки...»)
+        if (hasStem(h, "перчатк") || hasStem(h, "обмотк") || hasStem(h, "рукавиц")
+                || hasStem(h, "хватк") || hasStem(h, "наруч")) {
+            return GearSlot.GLOVES;
+        }
+        // 4. Сапоги («Сапоги Быстрого Шага», «Сандалии Старшего», «Устойчивые Сапоги», «Ботинки...»)
+        if (hasStem(h, "сапог") || hasStem(h, "ботинк") || hasStem(h, "сандал")
+                || hasStem(h, "понож") || hasStem(h, "ботфорт") || h.contains("быстрого шага")) {
+            return GearSlot.BOOTS;
+        }
+        // 5. Пояс
+        if (hasStem(h, "пояс") || hasWord(h, "ремень") || hasWord(h, "ремня") || hasStem(h, "кушак")) {
+            return GearSlot.BELT;
+        }
+        // 6. Амулет
+        if (hasStem(h, "амулет") || hasStem(h, "ожерел") || hasStem(h, "кулон") || hasStem(h, "медальон")) {
+            return GearSlot.AMULET;
+        }
+        // 7. Кольцо
+        if (hasStem(h, "кольц") || hasStem(h, "перстен") || hasStem(h, "печатк")) {
+            return GearSlot.RING;
+        }
+        // 8. Шлем («Корона зверя», «Капюшон из дикой шкуры», «Диадема мудреца», «Шлем...»)
+        if (hasStem(h, "шлем") || hasStem(h, "капюшон") || hasWord(h, "корона") || hasWord(h, "короны")
+                || hasStem(h, "диадем") || hasStem(h, "шапк") || hasStem(h, "тиар") || hasWord(h, "маска")) {
+            return GearSlot.HELMET;
+        }
+        // 9. Броня / Нагрудник (БЕЗ ложных срабатываний на «бронзовая» / «бронированный» / «дикой шкуры»!)
+        if (hasWord(h, "броня") || hasWord(h, "брони") || hasStem(h, "кирас") || hasStem(h, "доспех")
+                || hasStem(h, "нагрудн") || hasStem(h, "жилет") || hasStem(h, "пластин")
+                || hasStem(h, "панцир") || hasWord(h, "пальто") || h.contains("плащ пугала")
+                || hasStem(h, "манти") || hasStem(h, "одеяни") || hasStem(h, "туник") || hasStem(h, "кольчуг")) {
+            return GearSlot.CHEST;
+        }
+        return null;
+    }
+
+    private static boolean isWordChar(char c) {
+        return (c >= 'а' && c <= 'я') || c == 'ё' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    }
+
+    /** Точное вхождение целого слова (с проверкой границ слева и справа). */
+    static boolean hasWord(String text, String word) {
+        if (text == null || word == null || word.isEmpty()) return false;
+        int from = 0;
+        int wLen = word.length();
+        while (true) {
+            int idx = text.indexOf(word, from);
+            if (idx < 0) return false;
+            boolean leftOk = (idx == 0) || !isWordChar(text.charAt(idx - 1));
+            int end = idx + wLen;
+            boolean rightOk = (end >= text.length()) || !isWordChar(text.charAt(end));
+            if (leftOk && rightOk) return true;
+            from = idx + 1;
+        }
+    }
+
+    /** Вхождение корня в начале слова (граница слова слева: «щит» НЕ сработает внутри «защита»!). */
+    static boolean hasStem(String text, String stem) {
+        if (text == null || stem == null || stem.isEmpty()) return false;
+        int from = 0;
+        while (true) {
+            int idx = text.indexOf(stem, from);
+            if (idx < 0) return false;
+            boolean leftOk = (idx == 0) || !isWordChar(text.charAt(idx - 1));
+            if (leftOk) return true;
+            from = idx + 1;
+        }
     }
 
     /**

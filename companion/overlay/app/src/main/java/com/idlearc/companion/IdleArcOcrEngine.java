@@ -24,6 +24,7 @@ public class IdleArcOcrEngine {
     private final float[] relYs;
     private final float[][] vectors; // [count][gw * gh] в диапазоне 0..1
 
+    private static final Pattern DIGIT_ONE_LEFT = Pattern.compile("(?<=[0-9+×.,(])[ТTІl|](?=[0-9.,%оОoO])");
     private static final Pattern DIGIT_Z_LEFT = Pattern.compile("(?<=[0-9+×.,(])[зЗ]");
     private static final Pattern DIGIT_Z_RIGHT = Pattern.compile("[зЗ](?=[0-9.%])");
     private static final Pattern DIGIT_O_LEFT = Pattern.compile("(?<=[0-9+×.,(])[оОoO]");
@@ -80,19 +81,53 @@ public class IdleArcOcrEngine {
         public final float cyanRatio;
         public final float purpleRatio;
         public final int badgeStrokes;
+        public final int maxLum;
 
         public OcrLine(String text, int y0, int y1, float cyanRatio, float purpleRatio, int badgeStrokes) {
+            this(text, y0, y1, cyanRatio, purpleRatio, badgeStrokes, 255);
+        }
+
+        public OcrLine(String text, int y0, int y1, float cyanRatio, float purpleRatio, int badgeStrokes, int maxLum) {
             this.text = text;
             this.y0 = y0;
             this.y1 = y1;
             this.cyanRatio = cyanRatio;
             this.purpleRatio = purpleRatio;
             this.badgeStrokes = badgeStrokes;
+            this.maxLum = maxLum;
         }
 
         public boolean hasAwakenHighlight() {
             return cyanRatio >= 0.16f || purpleRatio >= 0.18f;
         }
+    }
+
+    /**
+     * Отсекает затемнённые строки фонового экрана (над и под открытым модальным окном IdleArc).
+     * В IdleArc любое открытое окно предмета/навыка/статов затемняет фон до яркости <= 135,
+     * тогда как текст внутри активного попапа имеет яркость 180..255.
+     * На полноэкранных вкладках без попапа все строки яркие (>= 180) и возвращаются целиком.
+     */
+    public static List<OcrLine> isolateActiveModalLines(List<OcrLine> lines) {
+        if (lines == null || lines.size() < 2) return lines;
+        int brightCount = 0;
+        int firstBright = -1;
+        int lastBright = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            int lum = lines.get(i).maxLum;
+            if (lum >= 175) {
+                brightCount++;
+            }
+            if (lum >= 158) {
+                if (firstBright == -1) firstBright = i;
+                lastBright = i;
+            }
+        }
+        if (brightCount >= 2 && firstBright >= 0 && lastBright >= firstBright
+                && (firstBright > 0 || lastBright < lines.size() - 1)) {
+            return new ArrayList<>(lines.subList(firstBright, lastBright + 1));
+        }
+        return lines;
     }
 
     /**
@@ -232,10 +267,11 @@ public class IdleArcOcrEngine {
             int ly1 = band[1];
             int lh = ly1 - ly0;
 
-            // Измеряем цветовой профиль активных пикселей строки (голубой значок/текст Пробуждения I..V или фиолетовый акцент)
+            // Измеряем цветовой профиль и пиковую яркость активных пикселей строки
             int fgPixels = 0;
             int cyanPixels = 0;
             int purplePixels = 0;
+            int peakLum = 0;
             for (int y = ly0; y < ly1; y++) {
                 int imgRow = (ry0 + y) * imgW + rx0;
                 float[] dRow = diff[y];
@@ -246,6 +282,8 @@ public class IdleArcOcrEngine {
                         int r = (px >> 16) & 0xFF;
                         int g = (px >> 8) & 0xFF;
                         int b = px & 0xFF;
+                        int lum = Math.max(r, Math.max(g, b));
+                        if (lum > peakLum) peakLum = lum;
                         // Голубой/бирюзовый цвет усиленного аффикса (cyan: высокий G и B, низкий R)
                         if (b >= 165 && g >= 135 && (b - r) >= 50 && (g - r) >= 35 && (g - b) <= 35) {
                             cyanPixels++;
@@ -365,7 +403,7 @@ public class IdleArcOcrEngine {
             String line = postProcessLine(sb.toString().trim());
             if (!line.isEmpty()) {
                 resultLines.add(new OcrLine(
-                        line, ry0 + ly0, ry0 + ly1, cyanRatio, purpleRatio, detectedBadgeStrokes));
+                        line, ry0 + ly0, ry0 + ly1, cyanRatio, purpleRatio, detectedBadgeStrokes, peakLum));
             }
         }
 
@@ -431,10 +469,15 @@ public class IdleArcOcrEngine {
 
     private static String postProcessLine(String s) {
         if (s.isEmpty()) return s;
-        s = DIGIT_Z_LEFT.matcher(s).replaceAll("3");
-        s = DIGIT_Z_RIGHT.matcher(s).replaceAll("3");
-        s = DIGIT_O_LEFT.matcher(s).replaceAll("0");
-        s = DIGIT_O_RIGHT.matcher(s).replaceAll("0");
+        s = DIGIT_ONE_LEFT.matcher(s).replaceAll("1");
+        for (int pass = 0; pass < 4; pass++) {
+            String prev = s;
+            s = DIGIT_Z_LEFT.matcher(s).replaceAll("3");
+            s = DIGIT_Z_RIGHT.matcher(s).replaceAll("3");
+            s = DIGIT_O_LEFT.matcher(s).replaceAll("0");
+            s = DIGIT_O_RIGHT.matcher(s).replaceAll("0");
+            if (s.equals(prev)) break;
+        }
         return s;
     }
 }

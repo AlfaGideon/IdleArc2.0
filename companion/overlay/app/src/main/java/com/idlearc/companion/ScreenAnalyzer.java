@@ -48,7 +48,9 @@ public class ScreenAnalyzer {
         int ry0 = (int) (h * 0.08);
         int ry1 = (int) (h * 0.90);
 
-        List<IdleArcOcrEngine.OcrLine> metaLines = ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1);
+        List<IdleArcOcrEngine.OcrLine> rawMetaLines = ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1);
+        // Отсекаем затемнённый фоновый экран (<= 135 яркости) над и под открытым модальным окном предмета/скилла
+        List<IdleArcOcrEngine.OcrLine> metaLines = IdleArcOcrEngine.isolateActiveModalLines(rawMetaLines);
         List<String> lines = new ArrayList<>(metaLines.size());
         for (IdleArcOcrEngine.OcrLine ml : metaLines) {
             lines.add(ml.text);
@@ -148,10 +150,16 @@ public class ScreenAnalyzer {
             return analyzeItemComparison(ocr, argb, w, h, profile);
         }
 
-        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / ПОЗИЦИЙ АФФИКСОВ КУЗНИЦЫ (ИНТЕЛЛЕКТУАЛЬНЫЙ ПОДБОР ПО МЕСТАМ #1..#N)
+        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / ПОЗИЦИЙ АФФИКСОВ КУЗНИЦЫ (ИНТЕЛЛЕКТУАЛЬНЫЙ ПОДБОР ПО МЕСТАМ #1..#5)
+        boolean hasOpenItemCardMarkers = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines) >= 0
+                || lowAll.contains("надеть") || lowAll.contains("снять") || lowAll.contains("разобрать")
+                || lowAll.contains("бонус добычи") || lowAll.contains("перераспредел")
+                || lowAll.contains("гнезд") || lowAll.contains("гнёзд");
         boolean equipGridNoModal = (lowAll.contains("кодекс") && lowAll.contains("автонадписи"))
-                && !lowAll.contains("надеть") && !lowAll.contains("разобрать") && !lowAll.contains("перераспредел");
-        SlotAffixAdvisor.GearSlot detectedSlot = equipGridNoModal ? null : SlotAffixAdvisor.detectSlotFromLines(lines);
+                && !hasOpenItemCardMarkers;
+        SlotAffixAdvisor.GearSlot detectedSlot = equipGridNoModal
+                ? null
+                : SlotAffixAdvisor.detectSlotFromModalLines(metaLines);
 
         if (!equipGridNoModal) {
             AffixPositionOptimizer.OptimizationReport opt =

@@ -109,7 +109,14 @@ public class AffixPositionOptimizer {
         }
     }
 
+    /** Жёсткий лимит позиций вторичных аффиксов на любом предмете в IdleArc — строго 5 из 5 (5/5). */
+    public static final int MAX_AFFIXES_PER_ITEM = 5;
+
     private static final Pattern NUMBER_PAT = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)");
+    private static final Pattern AFFIX_COUNTER_PAT = Pattern.compile(
+            "(?:^|\\s|\\(|:)([0-5])\\s*(?:/|\\|)\\s*5(?:\\)|\\s|$)");
+    private static final Pattern AFFIX_OCR_COUNTER_PAT = Pattern.compile(
+            "(?:^|\\s)([1-5])15(?:\\s|$)");
     private static final Pattern ROMAN_EDGE_PAT = Pattern.compile(
             "(?:^|\\s|\\[|\\()(VIII|VII|VI|IV|III|II|V|I|lll|ll|lV)(?:\\)|\\]|\\s|$)");
     private static final Pattern EXPLICIT_AWAKEN_PCT_PAT = Pattern.compile(
@@ -189,19 +196,19 @@ public class AffixPositionOptimizer {
 
         if (ocrLines == null || ocrLines.isEmpty()) return null;
 
-        List<String> plainLines = new ArrayList<>(ocrLines.size());
-        for (IdleArcOcrEngine.OcrLine l : ocrLines) plainLines.add(l.text);
+        // Изолируем активное модальное окно от затемнённого фонового экрана (Снаряжение/Кузница)
+        List<IdleArcOcrEngine.OcrLine> modalLines = IdleArcOcrEngine.isolateActiveModalLines(ocrLines);
 
         SlotAffixAdvisor.GearSlot detectedSlot = explicitSlot != null
                 ? explicitSlot
-                : SlotAffixAdvisor.detectSlotFromLines(plainLines);
+                : SlotAffixAdvisor.detectSlotFromModalLines(modalLines);
 
         // На талисманах и питомцах своя механика (надписи +9 / гарант петов), здесь — только предметы с позициями аффиксов
         if (detectedSlot == SlotAffixAdvisor.GearSlot.TALISMAN || detectedSlot == SlotAffixAdvisor.GearSlot.PET) {
             return null;
         }
 
-        List<ParsedAffixRow> rows = extractSecondaryAffixRows(ocrLines);
+        List<ParsedAffixRow> rows = extractSecondaryAffixRows(modalLines);
         if (rows.isEmpty()) {
             return null;
         }
@@ -235,10 +242,11 @@ public class AffixPositionOptimizer {
         AffixType[] bestAssignment = solveOptimalAssignment(
                 rows, pool, itemScale, profile, itemDrContribution, itemDodgeContribution);
 
-        // 2. Формируем по-строчный вердикт ТОЛЬКО по текущим аффиксам #1..#N и их реальной разнице
+        // 2. Формируем по-строчный вердикт ТОЛЬКО по текущим аффиксам #1..#N (макс. 5/5) и их реальной разнице
         StringBuilder out = new StringBuilder();
-        String slotHeader = detectedSlot.shortChip
-                + (slotInferred ? " (пул определён по аффиксам)" : " (" + detectedSlot.slotTitle + ")");
+        String slotHeader = slotInferred
+                ? ("Предмет (шапка вне кадра — при необходимости выбери слот выше; авто-пул " + detectedSlot.shortChip + ")")
+                : (detectedSlot.shortChip + " (" + detectedSlot.slotTitle + ")");
 
         List<String> awakenedSummary = new ArrayList<>();
         for (ParsedAffixRow r : rows) {
@@ -248,7 +256,8 @@ public class AffixPositionOptimizer {
             }
         }
 
-        out.append("Предмет: ").append(slotHeader).append(" · Аффиксов: ").append(n).append("\n");
+        out.append("Предмет: ").append(slotHeader)
+           .append(" · Аффиксов: ").append(n).append("/").append(MAX_AFFIXES_PER_ITEM).append("\n");
         if (!awakenedSummary.isEmpty()) {
             out.append("💎 Бонус Пробуждения на: ").append(join(awakenedSummary, ", ")).append("\n");
         } else {
@@ -371,30 +380,110 @@ public class AffixPositionOptimizer {
     }
 
     // =========================================================================
-    // 1. ТОЧНОЕ ИЗВЛЕЧЕНИЕ ТОЛЬКО ВТОРИЧНЫХ АФФИКСОВ ПРЕДМЕТА (#1..#N)
+    // 1. ТОЧНОЕ ИЗВЛЕЧЕНИЕ ТОЛЬКО ВТОРИЧНЫХ АФФИКСОВ ПРЕДМЕТА (#1..#5, МАКС 5/5!)
     // =========================================================================
+
+    /**
+     * Находит индекс строки заголовка секции вторичных аффиксов («АФФИКСЫ 5/5», «Аффиксы»,
+     * «Позиции аффиксов», «Пробуждённые позиции аффиксов» и т.д.), либо -1.
+     */
+    public static int findAffixHeaderIndexFromStrings(List<String> lines) {
+        if (lines == null) return -1;
+        for (int i = 0; i < lines.size(); i++) {
+            String raw = lines.get(i);
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            if (isAffixSectionHeaderLine(low, raw)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    static boolean isAffixSectionHeaderLine(String low, String raw) {
+        if (low == null || raw == null) return false;
+        String rt = raw.trim();
+        if (rt.isEmpty() || rt.startsWith("+") || rt.contains("%")) return false;
+        if (low.contains("совместимые аффикс") || low.contains("все аффикс")
+                || low.contains("выберите аффикс") || low.contains("нет аффикс")
+                || low.contains("автонадписи")) {
+            return false;
+        }
+        // Не путаем со строкой самого стата (если вдруг в описании стата встретилось слово)
+        if (low.contains("урон") || low.contains("интеллект") || low.contains("здоров")
+                || low.contains("крит") || low.contains("уклонен") || low.contains("защит")) {
+            return false;
+        }
+        if (low.startsWith("аффикс") || low.startsWith("аффuкс") || low.startsWith("аффnкс")
+                || low.contains("позиции аффикс") || low.contains("позиций аффикс")
+                || low.contains("аффиксы") || low.contains("аффиксов")) {
+            return true;
+        }
+        // Запасной якорь на случай сильного искажения слова «АФФИКСЫ», но чёткого счётчика «5/5» / «4/5» справа
+        if (!low.contains("ранг") && !low.contains("уров") && !low.contains("гнезд") && !low.contains("гнёзд")) {
+            Matcher cm = AFFIX_COUNTER_PAT.matcher(rt);
+            if (cm.find() && rt.length() <= 28) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Извлекает точный лимит открытых позиций X из заголовка вида «АФФИКСЫ 4/5» или «Аффиксы (5/5)».
+     * Всегда возвращает число в диапазоне 0..MAX_AFFIXES_PER_ITEM (строго не более 5!).
+     */
+    static int parseExpectedAffixCountFromHeader(String raw) {
+        if (raw == null) return MAX_AFFIXES_PER_ITEM;
+        Matcher m = AFFIX_COUNTER_PAT.matcher(raw);
+        if (m.find()) {
+            int x = Integer.parseInt(m.group(1));
+            return Math.max(0, Math.min(MAX_AFFIXES_PER_ITEM, x));
+        }
+        Matcher om = AFFIX_OCR_COUNTER_PAT.matcher(raw);
+        if (om.find()) {
+            int x = Integer.parseInt(om.group(1));
+            return Math.max(1, Math.min(MAX_AFFIXES_PER_ITEM, x));
+        }
+        return MAX_AFFIXES_PER_ITEM;
+    }
 
     static List<ParsedAffixRow> extractSecondaryAffixRows(List<IdleArcOcrEngine.OcrLine> ocrLines) {
         int startIdx = 0;
         int endIdx = ocrLines.size();
         boolean sawExplicitAffixHeader = false;
+        int maxAllowedRows = MAX_AFFIXES_PER_ITEM;
 
         for (int i = 0; i < ocrLines.size(); i++) {
-            String low = DruidKnowledgeBase.normalizeForMatch(ocrLines.get(i).text);
-            if (!sawExplicitAffixHeader && (low.equals("аффиксы") || low.startsWith("аффиксы:")
-                    || low.contains("позиции аффиксов") || low.contains("позиций аффиксов"))) {
+            String raw = ocrLines.get(i).text;
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            if (!sawExplicitAffixHeader && isAffixSectionHeaderLine(low, raw)) {
                 sawExplicitAffixHeader = true;
                 startIdx = i + 1;
+                maxAllowedRows = parseExpectedAffixCountFromHeader(raw);
                 continue;
             }
-            if (i >= startIdx && isSectionAfterAffixes(low)) {
+            if (sawExplicitAffixHeader && i >= startIdx && isSectionAfterAffixes(low)) {
                 endIdx = i;
                 break;
             }
         }
 
-        List<ParsedAffixRow> parsed = new ArrayList<>();
-        boolean passedItemTitle = sawExplicitAffixHeader;
+        if (maxAllowedRows <= 0) {
+            return new ArrayList<>();
+        }
+
+        if (!sawExplicitAffixHeader) {
+            for (int i = 0; i < ocrLines.size(); i++) {
+                String low = DruidKnowledgeBase.normalizeForMatch(ocrLines.get(i).text);
+                if (isSectionAfterAffixes(low)) {
+                    endIdx = i;
+                    break;
+                }
+            }
+        }
+
+        List<ParsedAffixRow> rawCandidates = new ArrayList<>();
+        Set<AffixType> seenTypes = EnumSet.noneOf(AffixType.class);
 
         for (int i = startIdx; i < endIdx; i++) {
             IdleArcOcrEngine.OcrLine ol = ocrLines.get(i);
@@ -403,48 +492,90 @@ public class AffixPositionOptimizer {
 
             if (raw.length() < 3) continue;
             if (isNonAffixMetadataLine(low)) {
-                passedItemTitle = true;
                 continue;
             }
 
-            // Если заголовка «Аффиксы» не было на экране, пропускаем первую строку базового имплисита
-            // (например «Урон атаки: 48500» или «Защита предмета: 12000» или «Все классовые навыки +6» на факеле)
-            if (!sawExplicitAffixHeader && parsed.isEmpty() && isLikelyImplicitHeaderLine(low, raw)) {
-                passedItemTitle = true;
+            // Если заголовка «Аффиксы» не было в кадре (например прокрутили карточку вниз),
+            // отсекаем базовые имплиситы предмета (Защита, Базовый урон, +Все классовые навыки)
+            if (!sawExplicitAffixHeader && rawCandidates.isEmpty() && isLikelyImplicitHeaderLine(low, raw)) {
                 continue;
             }
 
             if (low.contains("заполните позицию") || low.contains("пустая позиция") || low.contains("выберите аффикс")) {
-                parsed.add(new ParsedAffixRow(parsed.size() + 1, AffixType.EMPTY_POSITION, raw, 0.0, 0, 0));
-                if (parsed.size() >= 6) break;
+                rawCandidates.add(new ParsedAffixRow(rawCandidates.size() + 1, AffixType.EMPTY_POSITION, raw, 0.0, 0, 0));
+                if (sawExplicitAffixHeader && rawCandidates.size() >= maxAllowedRows) break;
                 continue;
             }
 
             AffixType type = classifyAffixLine(low, raw);
             if (type == null) continue;
 
-            // Отсекаем строки без чисел (например случайный кусок описания без ролла)
+            // Отсекаем строки без чисел (например кусок описания без ролла)
             List<Double> nums = extractAllNumbers(raw);
             if (nums.isEmpty()) continue;
 
             double statVal = pickPrimaryStatValue(type, raw, nums);
             int[] awaken = detectAwakeningOnRow(ol, raw, nums, statVal);
 
-            parsed.add(new ParsedAffixRow(
-                    parsed.size() + 1, type, raw, statVal, awaken[0], awaken[1]));
-            if (parsed.size() >= 6) break;
+            if (sawExplicitAffixHeader) {
+                // Внутри секции вторичных аффиксов дубликаты одного типа запрещены механикой игры
+                if (seenTypes.contains(type)) continue;
+                seenTypes.add(type);
+                rawCandidates.add(new ParsedAffixRow(
+                        rawCandidates.size() + 1, type, raw, statVal, awaken[0], awaken[1]));
+                if (rawCandidates.size() >= maxAllowedRows) break;
+            } else {
+                // Если заголовок «Аффиксы» был вне кадра и наверху попался имплисит того же типа,
+                // что и реальный вторичный аффикс ниже — удаляем верхний имплисит!
+                int prevDup = -1;
+                for (int k = 0; k < rawCandidates.size(); k++) {
+                    if (rawCandidates.get(k).type == type) {
+                        prevDup = k;
+                        break;
+                    }
+                }
+                if (prevDup >= 0) {
+                    rawCandidates.remove(prevDup);
+                }
+                rawCandidates.add(new ParsedAffixRow(
+                        rawCandidates.size() + 1, type, raw, statVal, awaken[0], awaken[1]));
+            }
         }
-        return parsed;
+
+        // Жёсткий инвариант игры 5/5: если заголовок «АФФИКСЫ» был скроллнут за верхний край,
+        // а над 5 вторичными аффиксами остался вторичный имплисит редкой базы (hasSecondaryImplicit),
+        // отбрасываем верхние имплиситы и оставляем ровно последние <= 5 вторичных аффиксов!
+        int cap = Math.min(MAX_AFFIXES_PER_ITEM, maxAllowedRows);
+        if (rawCandidates.size() > cap) {
+            rawCandidates = new ArrayList<>(
+                    rawCandidates.subList(rawCandidates.size() - cap, rawCandidates.size()));
+        }
+
+        List<ParsedAffixRow> result = new ArrayList<>(rawCandidates.size());
+        for (int i = 0; i < rawCandidates.size(); i++) {
+            ParsedAffixRow r = rawCandidates.get(i);
+            result.add(new ParsedAffixRow(i + 1, r.type, r.rawLine, r.value, r.awakenStacks, r.awakenBonusPct));
+        }
+        return result;
     }
 
     private static boolean isSectionAfterAffixes(String low) {
         return low.startsWith("бонус добычи")
                 || low.startsWith("гнезд") || low.startsWith("гнёзд") || low.contains("самоцвет")
                 || low.equals("нефрит") || low.equals("янтарь") || low.equals("лазурит") || low.equals("гранат")
+                // Все 21 префикс секции «Бонус добычи» из libapp.so:
                 || low.startsWith("спутника") || low.startsWith("свирепый") || low.startsWith("отражающий")
                 || low.startsWith("истребителя") || low.startsWith("сокрушительный") || low.startsWith("неумолимый")
-                || low.startsWith("удачливый") || low.startsWith("процветающий") || low.startsWith("собирателя")
-                || low.equals("надеть") || low.equals("разобрать") || low.equals("продать")
+                || low.startsWith("бешенство:") || low.startsWith("стихийный всплеск")
+                || low.startsWith("укреплённый") || low.startsWith("укрепленный") || low.startsWith("бронированный")
+                || low.startsWith("живучий") || low.startsWith("точный") || low.startsWith("жестокий")
+                || low.startsWith("кровожадный") || low.startsWith("вампирский") || low.startsWith("иссушающий")
+                || low.startsWith("удачливый") || low.startsWith("процветающий")
+                || low.startsWith("учёного:") || low.startsWith("ученого:") || low.startsWith("собирателя")
+                // Секции Кузницы и кнопок действий под аффиксами:
+                || low.equals("пробуждение") || low.equals("стоимость") || low.startsWith("камни крафта")
+                || low.startsWith("улучшение тира") || low.startsWith("улучшение уровня")
+                || low.equals("надеть") || low.equals("снять") || low.equals("разобрать") || low.equals("продать")
                 || low.contains("надеть предмет") || low.contains("перераспределить пробуждение")
                 || low.contains("материалы пробуждения");
     }
@@ -453,6 +584,7 @@ public class AffixPositionOptimizer {
         return low.contains("очки снаряжения") || low.startsWith("уровень") || low.startsWith("требуется")
                 || low.contains("инфернальн") || low.contains("мифическ") || low.contains("легендарн")
                 || low.contains("эпическ") || low.contains("редкий") || low.contains("необычн")
+                || low.equals("базовый урон") || low.equals("надет") || low.equals("надето")
                 || low.contains("пробуждение:") || low.contains("ранг пробуждения")
                 || low.contains("сила атаки талисмана") || low.contains("бонусы жертв")
                 || low.contains("совместимые аффиксы") || low.contains("урона не добавляет");
@@ -516,7 +648,7 @@ public class AffixPositionOptimizer {
         if (low.contains("ловкост")) {
             return AffixType.DEXTERITY;
         }
-        if ((low.contains("сила") || low.contains("силы")) && !low.contains("талисман") && !low.contains("слова")) {
+        if (SlotAffixAdvisor.hasStem(low, "сил") && !low.contains("талисман") && !low.contains("слов")) {
             return AffixType.STRENGTH;
         }
         if (low.contains("преобразуется в") || low.contains("преобразование в")) {
