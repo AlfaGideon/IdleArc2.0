@@ -1,0 +1,2 @@
+# Used only for offline decoding of Android's binary manifest and signing metadata.
+androguard==4.1.3

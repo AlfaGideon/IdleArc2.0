@@ -1,0 +1,282 @@
+package com.idlearc.companion;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+/**
+ * Главный экран приложения IdleArc Druid Helper.
+ * Позволяет в 2 клика выдать разрешение «Поверх других окон» и запустить плавающий сканер экрана поверх IdleArc,
+ * а также посмотреть полный аудит Друида [UND] AlfaGideon (Ур. 324) и гайд 1 -> Кап.
+ */
+public class MainActivity extends Activity {
+
+    private static final int REQ_OVERLAY = 5001;
+    private static final int REQ_PROJECTION = 5002;
+    private static final int REQ_NOTIF = 5003;
+
+    private TextView permStatusTv;
+    private DruidProfile profile;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        profile = DruidProfile.load(this);
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF);
+            }
+        }
+
+        buildMainScreen();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        profile = DruidProfile.load(this);
+        updatePermissionBanner();
+    }
+
+    private void buildMainScreen() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(0xFF12101B);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(20), dp(16), dp(28));
+
+        // Заголовок
+        TextView headerTitle = new TextView(this);
+        headerTitle.setText("🌿 IdleArc Druid Helper");
+        headerTitle.setTextColor(0xFF34D399);
+        headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        root.addView(headerTitle);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Плавающий виджет-советник поверх игры · Офлайн OCR RU/EN · Без сети и автокликов");
+        subtitle.setTextColor(0xFF9CA3AF);
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        subtitle.setPadding(0, dp(4), 0, dp(14));
+        root.addView(subtitle);
+
+        // Карточка запуска виджета
+        LinearLayout launchCard = makeCard(0xFF1B1829, 0xFF34D399);
+
+        permStatusTv = new TextView(this);
+        permStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        permStatusTv.setPadding(0, 0, 0, dp(10));
+        launchCard.addView(permStatusTv);
+
+        TextView mainLaunchBtn = makeBigButton(
+                "🚀 ЗАПУСТИТЬ ПЛАВАЮЩИЙ СКАНЕР ПОВЕРХ ИГРЫ",
+                0xFF059669, 0xFFFFFFFF);
+        mainLaunchBtn.setOnClickListener(v -> startFullScannerFlow());
+        launchCard.addView(mainLaunchBtn);
+
+        TextView guideOnlyBtn = makeBigButton(
+                "📖 Запустить виджет-шпаргалку (без захвата экрана)",
+                0xFF2D2844, 0xFFE5E7EB);
+        LinearLayout.LayoutParams gpLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        gpLp.topMargin = dp(8);
+        guideOnlyBtn.setLayoutParams(gpLp);
+        guideOnlyBtn.setOnClickListener(v -> startGuideOnlyOverlay());
+        launchCard.addView(guideOnlyBtn);
+
+        TextView stopBtn = makeBigButton(
+                "✖ Остановить плавающий виджет",
+                0xFF3B1C26, 0xFFFCA5A5);
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        stLp.topMargin = dp(8);
+        stopBtn.setLayoutParams(stLp);
+        stopBtn.setOnClickListener(v -> {
+            stopService(new Intent(MainActivity.this, OverlayService.class));
+            Toast.makeText(MainActivity.this, "Виджет остановлен", Toast.LENGTH_SHORT).show();
+        });
+        launchCard.addView(stopBtn);
+
+        TextView howToTv = new TextView(this);
+        howToTv.setText("\nКак пользоваться в IdleArc:\n"
+                + "1. Нажми зелёную кнопку выше -> разреши «Поверх других окон» и «Запись/трансляцию экрана».\n"
+                + "2. Открой IdleArc — сбоку появится плавающая таблетка «🌿 ДРУИД | 🔍 СКАН | ⚡».\n"
+                + "3. Открой любой выпавший предмет, сравнение шмота, 3 надписи талисмана, навык или «Характеристики персонажа» и нажми «🔍 СКАН» (или включи «⚡» для авто-отслеживания!).");
+        howToTv.setTextColor(0xFFD1D5DB);
+        howToTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
+        howToTv.setLineSpacing(dp(2), 1.05f);
+        launchCard.addView(howToTv);
+
+        root.addView(launchCard);
+
+        // Карточка аудита текущего билда [UND] AlfaGideon
+        LinearLayout auditCard = makeCard(0xFF181625, 0xFFFBBF24);
+        LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        acLp.topMargin = dp(14);
+        auditCard.setLayoutParams(acLp);
+
+        TextView auditBody = new TextView(this);
+        auditBody.setText(DruidKnowledgeBase.buildAuditReport(profile));
+        auditBody.setTextColor(0xFFF3F4F6);
+        auditBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        auditBody.setLineSpacing(dp(2), 1.08f);
+        auditCard.addView(auditBody);
+        root.addView(auditCard);
+
+        // Карточка Автонадписей и Питомцев
+        LinearLayout inscCard = makeCard(0xFF181625, 0xFFA78BFA);
+        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        icLp.topMargin = dp(14);
+        inscCard.setLayoutParams(icLp);
+
+        TextView inscBody = new TextView(this);
+        inscBody.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
+        inscBody.setTextColor(0xFFE5E7EB);
+        inscBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.3f);
+        inscBody.setLineSpacing(dp(2), 1.08f);
+        inscCard.addView(inscBody);
+        root.addView(inscCard);
+
+        // Карточка полного гайда 1 -> Кап + все 18 навыков
+        LinearLayout guideCard = makeCard(0xFF181625, 0xFF34D399);
+        LinearLayout.LayoutParams gcLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        gcLp.topMargin = dp(14);
+        guideCard.setLayoutParams(gcLp);
+
+        StringBuilder skillsSummary = new StringBuilder();
+        skillsSummary.append(DruidKnowledgeBase.buildFullLevelingGuide()).append("\n\n")
+                     .append("━━ СПРАВОЧНИК ВСЕХ 18 НАВЫКОВ ДРУИДА (1.3.15) ━━\n");
+        for (DruidKnowledgeBase.SkillInfo s : DruidKnowledgeBase.SKILLS) {
+            skillsSummary.append("\n• ").append(s.ruName)
+                         .append(" [").append(s.branch).append(" Р").append(s.tierRank).append("] — ")
+                         .append(s.formulaRu).append("\n  ").append(s.capNoteRu);
+        }
+
+        TextView guideBody = new TextView(this);
+        guideBody.setText(skillsSummary.toString());
+        guideBody.setTextColor(0xFFE5E7EB);
+        guideBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
+        guideBody.setLineSpacing(dp(2), 1.06f);
+        guideCard.addView(guideBody);
+        root.addView(guideCard);
+
+        scroll.addView(root);
+        setContentView(scroll);
+        updatePermissionBanner();
+    }
+
+    private void updatePermissionBanner() {
+        boolean canOverlay = Settings.canDrawOverlays(this);
+        if (canOverlay) {
+            permStatusTv.setText("✅ Разрешение «Поверх других окон» выдано — можно запускать сканер!");
+            permStatusTv.setTextColor(0xFF6EE7B7);
+        } else {
+            permStatusTv.setText("⚠️ Шаг 1: требуется разрешение «Поверх других окон» (откроется по нажатию кнопки)");
+            permStatusTv.setTextColor(0xFFFBBF24);
+        }
+    }
+
+    private void startFullScannerFlow() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Включи переключатель для Druid Helper и вернись назад", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQ_OVERLAY);
+            return;
+        }
+        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        if (mpm != null) {
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
+        }
+    }
+
+    private void startGuideOnlyOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQ_OVERLAY);
+            return;
+        }
+        Intent svc = new Intent(this, OverlayService.class);
+        startService(svc);
+        Toast.makeText(this, "🌿 Плавающая шпаргалка запущена! Открой IdleArc", Toast.LENGTH_SHORT).show();
+        moveTaskToBack(true);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_OVERLAY) {
+            updatePermissionBanner();
+            if (Settings.canDrawOverlays(this)) {
+                startFullScannerFlow();
+            }
+        } else if (requestCode == REQ_PROJECTION) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                Intent svc = new Intent(this, OverlayService.class);
+                svc.putExtra(OverlayService.EXTRA_RESULT_CODE, resultCode);
+                svc.putExtra(OverlayService.EXTRA_RESULT_DATA, data);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(svc);
+                } else {
+                    startService(svc);
+                }
+                Toast.makeText(this, "🌿 Виджет запущен! Переключайся в IdleArc", Toast.LENGTH_SHORT).show();
+                moveTaskToBack(true);
+            } else {
+                Toast.makeText(this, "Захват экрана отменён — можно запустить шпаргалку без захвата", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private LinearLayout makeCard(int bg, int stroke) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(bg);
+        gd.setCornerRadius(dp(16));
+        gd.setStroke(dp(1), stroke);
+        card.setBackground(gd);
+        return card;
+    }
+
+    private TextView makeBigButton(String text, int bg, int fg) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(fg);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dp(14), dp(12), dp(14), dp(12));
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(bg);
+        gd.setCornerRadius(dp(12));
+        tv.setBackground(gd);
+        return tv;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+}
