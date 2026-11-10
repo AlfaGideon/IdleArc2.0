@@ -26,25 +26,25 @@ import java.util.regex.Pattern;
 public class AffixPositionOptimizer {
 
     public enum AffixType {
-        PET_DAMAGE("Урон питомца %", 120.0, true),
-        DOUBLE_HIT("Шанс двойного удара %", 75.0, true),
-        DOUBLE_DAMAGE("Шанс двойного урона %", 95.0, true),
-        CRIT_DAMAGE("Крит. урон %", 150.0, true),
-        CRIT_CHANCE("Шанс крита %", 65.0, true),
-        INTELLIGENCE("Интеллект", 145.0, false),
-        DEXTERITY("Ловкость", 145.0, false),
-        STRENGTH("Сила", 145.0, false),
-        DAMAGE_REDUCTION("Снижение урона %", 9.0, true),
-        MAX_HEALTH("Макс. здоровье %", 22.0, true),
-        DEFENSE_PERCENT("Защита %", 25.0, true),
+        PET_DAMAGE("Урон питомца %", 390.0, true),
+        DOUBLE_HIT("Шанс двойного удара %", 50.0, true),
+        DOUBLE_DAMAGE("Шанс двойного урона %", 50.0, true),
+        CRIT_DAMAGE("Крит. урон %", 50.0, true),
+        CRIT_CHANCE("Шанс крита %", 30.0, true),
+        INTELLIGENCE("Интеллект", 202.0, false),
+        DEXTERITY("Ловкость", 202.0, false),
+        STRENGTH("Сила", 202.0, false),
+        DAMAGE_REDUCTION("Снижение урона %", 12.0, true),
+        MAX_HEALTH("Макс. здоровье %", 35.0, true),
+        DEFENSE_PERCENT("Защита %", 40.0, true),
         FLAT_DEFENSE("Защита (плоская)", 3500.0, false),
-        DODGE_CHANCE("Шанс уклонения %", 16.0, true),
+        DODGE_CHANCE("Шанс уклонения %", 20.0, true),
         LIFE_ON_HIT("Здоровье за удар", 120.0, false),
         LIFE_ON_KILL("Здоровье за убийство", 350.0, false),
-        LIFE_RECOVERY("Восстановление здоровья", 150.0, false),
-        GOLD_GAIN("Бонус золота %", 110.0, true),
-        EXP_GAIN("Бонус опыта %", 110.0, true),
-        BLOODTHIRST("Жажда крови %", 18.0, true),
+        LIFE_RECOVERY("Здоровье за удар и за убийство %", 23.5, true),
+        GOLD_GAIN("Бонус золота %", 82.5, true),
+        EXP_GAIN("Бонус опыта %", 50.0, true),
+        BLOODTHIRST("Жажда крови %", 20.0, true),
         ADDED_DAMAGE("Фикс. урон атаки", 1800.0, false),
         ELEMENTAL_CONVERT("Преобразование в стихию %", 25.0, true),
         EMPTY_POSITION("Пустая позиция", 0.0, false);
@@ -113,12 +113,15 @@ public class AffixPositionOptimizer {
     public static final int MAX_AFFIXES_PER_ITEM = 5;
 
     private static final Pattern NUMBER_PAT = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)");
+    private static final Pattern PLUS_STAT_PAT = Pattern.compile("\\+\\s*([0-9]+(?:\\s?[0-9]+)*(?:[.,][0-9]+)?)\\s*(%?)");
     private static final Pattern AFFIX_COUNTER_PAT = Pattern.compile(
             "(?:^|\\s|\\(|:)([0-5])\\s*(?:/|\\|)\\s*5(?:\\)|\\s|$)");
     private static final Pattern AFFIX_OCR_COUNTER_PAT = Pattern.compile(
             "(?:^|\\s)([1-5])15(?:\\s|$)");
-    private static final Pattern ROMAN_EDGE_PAT = Pattern.compile(
-            "(?:^|\\s|\\[|\\()(VIII|VII|VI|IV|III|II|V|I|lll|ll|lV)(?:\\)|\\]|\\s|$)");
+    private static final Pattern ROMAN_SUFFIX_PAT = Pattern.compile(
+            "(?:^|\\s|\\[|\\()([IVXIl1|]{1,5})(?:\\)|\\])?\\s*$");
+    private static final Pattern ROMAN_PREFIX_PAT = Pattern.compile(
+            "^\\s*(?:\\[|\\()?([IVXIl1|]{1,5})(?:\\]|\\))?\\s+(?=\\+|[А-Яа-яA-Za-z])");
     private static final Pattern EXPLICIT_AWAKEN_PCT_PAT = Pattern.compile(
             "\\(\\s*\\+\\s*([1-9][0-9]?)\\s*%\\s*\\)|★\\s*([1-9])");
 
@@ -131,14 +134,15 @@ public class AffixPositionOptimizer {
             case WEAPON:
                 return Arrays.asList(
                         AffixType.PET_DAMAGE, AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE, AffixType.INTELLIGENCE,
+                        AffixType.INTELLIGENCE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
                         AffixType.DEXTERITY, AffixType.STRENGTH, AffixType.ADDED_DAMAGE,
-                        AffixType.LIFE_ON_HIT, AffixType.ELEMENTAL_CONVERT);
+                        AffixType.LIFE_RECOVERY, AffixType.LIFE_ON_HIT, AffixType.ELEMENTAL_CONVERT);
             case TORCH:
                 return Arrays.asList(
                         AffixType.PET_DAMAGE, AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE,
-                        AffixType.INTELLIGENCE, AffixType.CRIT_CHANCE, AffixType.CRIT_DAMAGE,
-                        AffixType.BLOODTHIRST, AffixType.GOLD_GAIN, AffixType.EXP_GAIN);
+                        AffixType.INTELLIGENCE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.BLOODTHIRST, AffixType.LIFE_RECOVERY,
+                        AffixType.GOLD_GAIN, AffixType.EXP_GAIN);
             case GLOVES:
                 return Arrays.asList(
                         AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE, AffixType.PET_DAMAGE,
@@ -252,17 +256,21 @@ public class AffixPositionOptimizer {
                 : (detectedSlot.shortChip + " (" + detectedSlot.slotTitle + ")");
 
         List<String> awakenedSummary = new ArrayList<>();
+        int totalAwakenStacks = 0;
         for (ParsedAffixRow r : rows) {
             if (r.awakenBonusPct > 0) {
-                awakenedSummary.add("#" + r.positionIndex + " (+" + r.awakenBonusPct + "%"
-                        + (r.awakenStacks > 0 ? " [" + toRoman(r.awakenStacks) + "]" : "") + ")");
+                totalAwakenStacks += Math.max(1, r.awakenStacks);
+                awakenedSummary.add("#" + r.positionIndex + " ["
+                        + (r.awakenStacks > 0 ? toRoman(r.awakenStacks) + " · " : "")
+                        + "+" + r.awakenBonusPct + "%]");
             }
         }
 
         out.append("Предмет: ").append(slotHeader)
            .append(" · Аффиксов: ").append(n).append("/").append(MAX_AFFIXES_PER_ITEM).append("\n");
         if (!awakenedSummary.isEmpty()) {
-            out.append("💎 Бонус Пробуждения на: ").append(join(awakenedSummary, ", ")).append("\n");
+            out.append("💎 Пробуждение позиций (A").append(totalAwakenStacks).append("): ")
+               .append(join(awakenedSummary, ", ")).append("\n");
         } else {
             out.append("ℹ️ Голубых усилений Пробуждения на строках не обнаружено (все позиции ×1.00)\n");
         }
@@ -327,6 +335,13 @@ public class AffixPositionOptimizer {
                    .append(" → даст ").append(targetMetric.shortImpact)
                    .append(String.format(Locale.US, " (чистая выгода +%.1f%% ценности)", diffUtility)).append("\n");
                 out.append("   💡 Почему: ").append(buildWhyExplanation(row, curMetric, target, targetMetric, profile)).append("\n");
+                if (row.awakenBonusPct > 0) {
+                    out.append("   🔒 Важно по Кузнице: пробуждённый аффикс [")
+                       .append(row.awakenStacks > 0 ? toRoman(row.awakenStacks) : ("+" + row.awakenBonusPct + "%"))
+                       .append("] в игре нельзя перековать напрямую — сначала замени непробуждённые позиции, ")
+                       .append("либо нажми «Перераспределить пробуждение», чтобы голубой бонус сошёл с #")
+                       .append(row.positionIndex).append("!\n");
+                }
             }
         }
 
@@ -486,11 +501,41 @@ public class AffixPositionOptimizer {
             }
         }
 
+        // Предварительно склеиваем 2-строчные переносы внутри блока АФФИКСЫ:
+        // напр. строка 1: «Здоровье за удар и за убийство», строка 2: «+20%» (без названия стата на 2-й строке!)
+        List<IdleArcOcrEngine.OcrLine> mergedSectionLines = new ArrayList<>();
+        for (int i = startIdx; i < endIdx; i++) {
+            IdleArcOcrEngine.OcrLine cur = ocrLines.get(i);
+            String curRaw = cur.text.trim();
+            if (curRaw.isEmpty()) continue;
+            String curLow = DruidKnowledgeBase.normalizeForMatch(curRaw);
+
+            if (i + 1 < endIdx && !curRaw.contains("+")
+                    && classifyAffixLine(curLow, curRaw) != null) {
+                IdleArcOcrEngine.OcrLine nxt = ocrLines.get(i + 1);
+                String nxtRaw = nxt.text.trim();
+                String nxtLow = DruidKnowledgeBase.normalizeForMatch(nxtRaw);
+                if (nxtRaw.startsWith("+") && classifyAffixLine(nxtLow, nxtRaw) == null
+                        && (nxt.y0 - cur.y1) <= 48) {
+                    IdleArcOcrEngine.OcrLine combined = new IdleArcOcrEngine.OcrLine(
+                            curRaw + " " + nxtRaw,
+                            cur.y0, nxt.y1,
+                            Math.max(cur.cyanRatio, nxt.cyanRatio),
+                            Math.max(cur.purpleRatio, nxt.purpleRatio),
+                            Math.max(cur.badgeStrokes, nxt.badgeStrokes),
+                            Math.max(cur.maxLum, nxt.maxLum));
+                    mergedSectionLines.add(combined);
+                    i++; // проглотили вторую строку переноса
+                    continue;
+                }
+            }
+            mergedSectionLines.add(cur);
+        }
+
         List<ParsedAffixRow> rawCandidates = new ArrayList<>();
         Set<AffixType> seenTypes = EnumSet.noneOf(AffixType.class);
 
-        for (int i = startIdx; i < endIdx; i++) {
-            IdleArcOcrEngine.OcrLine ol = ocrLines.get(i);
+        for (IdleArcOcrEngine.OcrLine ol : mergedSectionLines) {
             String raw = ol.text.trim();
             String low = DruidKnowledgeBase.normalizeForMatch(raw);
 
@@ -499,8 +544,6 @@ public class AffixPositionOptimizer {
                 continue;
             }
 
-            // Если заголовка «Аффиксы» не было в кадре (например прокрутили карточку вниз),
-            // отсекаем базовые имплиситы предмета (Защита, Базовый урон, +Все классовые навыки)
             if (!sawExplicitAffixHeader && rawCandidates.isEmpty() && isLikelyImplicitHeaderLine(low, raw)) {
                 continue;
             }
@@ -514,11 +557,12 @@ public class AffixPositionOptimizer {
             AffixType type = classifyAffixLine(low, raw);
             if (type == null) continue;
 
-            // Отсекаем строки без чисел (например кусок описания без ролла)
+            double statVal = extractPlusStatValue(raw);
             List<Double> nums = extractAllNumbers(raw);
-            if (nums.isEmpty()) continue;
-
-            double statVal = pickPrimaryStatValue(type, raw, nums);
+            if (statVal <= 0.0 && nums.isEmpty()) continue;
+            if (statVal <= 0.0) {
+                statVal = pickPrimaryStatValue(type, raw, nums);
+            }
             int[] awaken = detectAwakeningOnRow(ol, raw, nums, statVal);
 
             if (sawExplicitAffixHeader) {
@@ -564,10 +608,12 @@ public class AffixPositionOptimizer {
     }
 
     private static boolean isSectionAfterAffixes(String low) {
-        return low.startsWith("бонус добычи")
+        return low.contains("ячейка") || low.contains("чейка")
+                || (low.startsWith("афф") && (low.contains("5") || low.contains("уров")))
+                || low.startsWith("бонус добычи") || low.startsWith("бонус дропа")
                 || low.startsWith("гнезд") || low.startsWith("гнёзд") || low.contains("самоцвет")
                 || low.equals("нефрит") || low.equals("янтарь") || low.equals("лазурит") || low.equals("гранат")
-                // Все 21 префикс секции «Бонус добычи» из libapp.so:
+                // Все префиксы секции «Бонус дропа / Бонус добычи»:
                 || low.startsWith("спутника") || low.startsWith("свирепый") || low.startsWith("отражающий")
                 || low.startsWith("истребителя") || low.startsWith("сокрушительный") || low.startsWith("неумолимый")
                 || low.startsWith("бешенство:") || low.startsWith("стихийный всплеск")
@@ -576,10 +622,11 @@ public class AffixPositionOptimizer {
                 || low.startsWith("кровожадный") || low.startsWith("вампирский") || low.startsWith("иссушающий")
                 || low.startsWith("удачливый") || low.startsWith("процветающий")
                 || low.startsWith("учёного:") || low.startsWith("ученого:") || low.startsWith("собирателя")
-                // Секции Кузницы и кнопок действий под аффиксами:
+                // Кнопки действий внизу попапа («Снять · Улучшить · Создать · Внешний вид»):
+                || low.contains("внешний вид") || low.contains("улучшить") || low.contains("учшить")
                 || low.equals("пробуждение") || low.equals("стоимость") || low.startsWith("камни крафта")
                 || low.startsWith("улучшение тира") || low.startsWith("улучшение уровня")
-                || low.equals("надеть") || low.equals("снять") || low.equals("разобрать") || low.equals("продать")
+                || low.equals("надеть") || low.startsWith("снять") || low.equals("разобрать") || low.equals("продать")
                 || low.contains("надеть предмет") || low.contains("перераспределить пробуждение")
                 || low.contains("материалы пробуждения");
     }
@@ -607,11 +654,13 @@ public class AffixPositionOptimizer {
         if (low.contains("урон питомц") || low.contains("урона питомц") || low.contains("урону питомц")) {
             return AffixType.PET_DAMAGE;
         }
-        if (low.contains("двойного удара") || low.contains("двойной удар")) {
-            return AffixType.DOUBLE_HIT;
-        }
-        if (low.contains("двойного урона") || low.contains("двойной урон")) {
+        // Сначала «двойного урона» (содержит «урон»), затем «двойного удара» (в т.ч. слипшееся «двойного мара»/«дара» в Roboto)
+        if (low.contains("двойного урон") || low.contains("двойной урон")) {
             return AffixType.DOUBLE_DAMAGE;
+        }
+        if (low.contains("двойного удар") || low.contains("двойной удар")
+                || (low.contains("двойного ") && !low.contains("урон"))) {
+            return AffixType.DOUBLE_HIT;
         }
         if (low.contains("крит. урон") || low.contains("крит урон") || low.contains("критический урон")) {
             return AffixType.CRIT_DAMAGE;
@@ -631,14 +680,17 @@ public class AffixPositionOptimizer {
         if (low.contains("жажда крови") || low.contains("жажды крови")) {
             return AffixType.BLOODTHIRST;
         }
+        // Процентный аффикс «Здоровье за удар и за убийство +20%» проверяем ДО плоского «Здоровье за удар»!
+        if ((low.contains("здоровье за удар") && low.contains("убийств"))
+                || low.contains("восстановление здоров") || low.contains("регенерац")
+                || (low.contains("здоровье за удар") && raw.contains("%"))) {
+            return AffixType.LIFE_RECOVERY;
+        }
         if (low.contains("здоровье за удар") || low.contains("здоровье при ударе")) {
             return AffixType.LIFE_ON_HIT;
         }
         if (low.contains("здоровье за убийство")) {
             return AffixType.LIFE_ON_KILL;
-        }
-        if (low.contains("восстановление здоров") || low.contains("регенерац")) {
-            return AffixType.LIFE_RECOVERY;
         }
         if (low.contains("бонус золот") || (low.contains("золот") && raw.contains("%"))) {
             return AffixType.GOLD_GAIN;
@@ -655,10 +707,13 @@ public class AffixPositionOptimizer {
         if (SlotAffixAdvisor.hasStem(low, "сил") && !low.contains("талисман") && !low.contains("слов")) {
             return AffixType.STRENGTH;
         }
-        if (low.contains("преобразуется в") || low.contains("преобразование в")) {
+        if (low.contains("преобразуется в") || low.contains("преобразование в") || low.contains("преобразовано в")) {
             return AffixType.ELEMENTAL_CONVERT;
         }
-        if (low.contains("фикс. урон атаки") || low.contains("дополнительный урон") || low.contains("урон атаки")) {
+        if (low.contains("фикс. урон атаки") || low.contains("дополнительный урон")
+                || low.contains("физический урон") || low.contains("урон атаки")
+                || low.contains("урон огн") || low.contains("урон яд") || low.contains("урон природ")
+                || low.contains("урон вод") || low.contains("урон земл") || low.contains("урон воздух")) {
             return AffixType.ADDED_DAMAGE;
         }
         if (low.contains("защит")) {
@@ -670,9 +725,9 @@ public class AffixPositionOptimizer {
     /**
      * Определяет число усилений Пробуждения (I..VIII) и % бонуса (+10% за каждое попадание Пробуждения)
      * конкретно на данной строке аффикса:
-     *  - по тексту значка римской цифры I, II, III, IV, V, VI...;
-     *  - по явному тегу (+10%), (+20%), (+30%) или ★1..★5;
-     *  - по голубому/фиолетовому цвету строки + числу штрихов в плашке [I..V].
+     *  - в IdleArc 1.3.15 римская цифра I, II, III, IV, V, VI рисуется СПРАВА после значения ролла («+424% III», «+494% II», «+56% I»);
+     *  - поддерживаются все оптические варианты штрихов Roboto (Ill, lll, ll, l, 1, lV, Vl);
+     *  - также поддерживается префиксный формат и явный (+20%).
      */
     private static int[] detectAwakeningOnRow(IdleArcOcrEngine.OcrLine ol, String raw, List<Double> nums, double statVal) {
         int stacks = 0;
@@ -690,12 +745,29 @@ public class AffixPositionOptimizer {
             }
         }
 
-        // 2. Римская цифра I / II / III / IV / V / VI на краю строки аффикса
+        // 2. Римская цифра СПРАВА после ролла +число[%] (основной формат IdleArc 1.3.15: «• Урон питомца +424% III»)
         if (pct == 0) {
-            Matcher rm = ROMAN_EDGE_PAT.matcher(raw);
-            if (rm.find()) {
-                int rVal = parseRoman(rm.group(1));
-                // Для обычной строки без голубого цвета одиночную 'I' принимаем, если она стоит отдельным префиксом перед '+'
+            Matcher plusM = PLUS_STAT_PAT.matcher(raw);
+            if (plusM.find()) {
+                String tail = raw.substring(plusM.end()).trim();
+                if (!tail.isEmpty()) {
+                    Matcher sm = ROMAN_SUFFIX_PAT.matcher(" " + tail);
+                    if (sm.find()) {
+                        int rVal = parseRoman(sm.group(1));
+                        if (rVal >= 2 || (rVal == 1 && (ol.hasAwakenHighlight() || !sm.group(1).equals("1")))) {
+                            stacks = rVal;
+                            pct = stacks * 10;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Римская цифра СЛЕВА перед аффиксом (запасной формат: «II +148 Интеллект»)
+        if (pct == 0) {
+            Matcher prefM = ROMAN_PREFIX_PAT.matcher(raw);
+            if (prefM.find()) {
+                int rVal = parseRoman(prefM.group(1));
                 if (rVal >= 2 || ol.hasAwakenHighlight() || raw.trim().matches("^(?:I|\\[I\\])\\s+\\+.*")) {
                     stacks = rVal;
                     pct = stacks * 10;
@@ -703,19 +775,15 @@ public class AffixPositionOptimizer {
             }
         }
 
-        // 3. Если на одной строке два числа и второе кратно 10% (напр. «+840 Интеллект +20%»)
-        if (pct == 0 && nums.size() >= 2 && raw.contains("%")) {
-            double last = nums.get(nums.size() - 1);
-            if (Math.abs(last - statVal) > 0.01 && last >= 10 && last <= 100 && ((int) last) % 10 == 0) {
-                pct = (int) Math.round(last);
-                stacks = pct / 10;
-            }
-        }
-
         // 4. Пиксельная подсветка голубым (cyan) / фиолетовым цветом усиленного аффикса в IdleArc
-        if (pct == 0 && ol.hasAwakenHighlight()) {
-            stacks = ol.badgeStrokes >= 1 ? ol.badgeStrokes : 1;
-            pct = stacks * 10;
+        if (ol.hasAwakenHighlight()) {
+            if (ol.badgeStrokes > stacks) {
+                stacks = ol.badgeStrokes;
+                pct = stacks * 10;
+            } else if (pct == 0) {
+                stacks = 1;
+                pct = 10;
+            }
         }
 
         return new int[]{stacks, pct};
@@ -723,7 +791,12 @@ public class AffixPositionOptimizer {
 
     private static int parseRoman(String s) {
         if (s == null) return 0;
-        String u = s.trim().replace('l', 'I');
+        String u = s.trim()
+                .replace('l', 'I')
+                .replace('1', 'I')
+                .replace('|', 'I')
+                .replace('v', 'V')
+                .replace('x', 'X');
         switch (u) {
             case "I": return 1;
             case "II": return 2;
@@ -802,11 +875,11 @@ public class AffixPositionOptimizer {
 
         switch (type) {
             case PET_DAMAGE: {
-                // Прямой профильный множитель урона питомца (основной пул пета ~950..1050% на эндгейм-шмоте)
-                double dpsPct = (val / 1070.0) * 100.0;
+                // Прямой профильный множитель урона питомца (общий пул на A5/A6 шмоте + петах ~3500..3700%)
+                double dpsPct = (val / 3600.0) * 100.0;
                 return new EvalMetric(dpsPct,
                         String.format(Locale.US, "+%.1f%% итогового DPS пета", dpsPct),
-                        "прямой профильный множитель урона питомца");
+                        "главный прямой множитель урона питомца");
             }
             case DOUBLE_HIT: {
                 double dpsPct = (val / (100.0 + Math.max(0.0, p.doubleHitChance))) * 100.0;
@@ -913,9 +986,13 @@ public class AffixPositionOptimizer {
                         String.format(Locale.US, "+%.1f%% к лечению (+0%% DPS)", val),
                         "множит только лечение за удар/убийство, урона питомцу не даёт");
             }
-            case LIFE_RECOVERY:
+            case LIFE_RECOVERY: {
+                return new EvalMetric(0.28,
+                        String.format(Locale.US, "+%.0f%% к отхилу (+0.0%% DPS пета)", val),
+                        "усиливает только лечение героя за удар/убийство, урона питомцу не даёт");
+            }
             case LIFE_ON_HIT: {
-                return new EvalMetric(0.25,
+                return new EvalMetric(0.20,
                         "плоский отхил (+0.0% DPS пета)",
                         "слабый плоский сустейн, не масштабирует урон питомца");
             }
@@ -971,9 +1048,9 @@ public class AffixPositionOptimizer {
                 AffixType cand = pool.get(j);
                 double expectedVal = cand.refRoll * itemScale * mult;
                 double u = evaluateAffixMetric(cand, expectedVal, p, itemDrContribution, itemDodgeContribution).utilityScore;
-                // Небольшой бонус стабильности (+0.08), чтобы при равном множителе пробуждения НЕ двигать уже выбитый хороший аффикс
+                // Бонус сохранения (+0.85), чтобы не предлагать ломать уже стоящий сильный аффикс ради микроразницы <0.8%
                 if (r.type == cand) {
-                    u += 0.08;
+                    u += 0.85;
                 }
                 utilMatrix[pos][j] = u;
             }
@@ -1083,6 +1160,19 @@ public class AffixPositionOptimizer {
             return String.format(Locale.US, "%.1f%%", v);
         }
         return String.format(Locale.US, "%.0f", Math.max(1.0, v));
+    }
+
+    private static double extractPlusStatValue(String raw) {
+        if (raw == null) return 0.0;
+        Matcher m = PLUS_STAT_PAT.matcher(raw);
+        if (m.find()) {
+            String numStr = m.group(1).replace(" ", "").replace(',', '.');
+            try {
+                return Double.parseDouble(numStr);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return 0.0;
     }
 
     private static List<Double> extractAllNumbers(String s) {

@@ -494,47 +494,63 @@ public class IdleArcOcrEngine {
 
         int maxLeftScan = (int) (rw * 0.50f);
         int x = 0;
-        while (x < maxLeftScan && colActive[x] <= 1) x++;
-        if (x >= (int) (rw * 0.30f)) return null;
+        int iconX0 = -1;
+        int iconX1 = -1;
+        int iconSpanY = 0;
+        int quietAfterIcon = 0;
 
-        int iconX0 = x;
-        int iconMinY = bh;
-        int iconMaxY = -1;
-        int quietRun = 0;
-        int iconX1 = iconX0;
+        // Пропускаем тонкие вертикальные рамки самой карточки (шириной < 24px, напр. x=55..60 на 1080p)
+        // и находим сам квадратный блок иконки предмета (шириной >= 42px) + пустой вертикальный зазор справа от неё.
         while (x < maxLeftScan) {
-            if (colActive[x] >= 2) {
-                quietRun = 0;
-                iconX1 = x + 1;
-                if (colMinY[x] < iconMinY) iconMinY = colMinY[x];
-                if (colMaxY[x] > iconMaxY) iconMaxY = colMaxY[x];
-            } else {
-                quietRun++;
-                if (quietRun >= 6) {
-                    break;
+            while (x < maxLeftScan && colActive[x] <= 1) x++;
+            if (x >= (int) (rw * 0.30f)) break;
+
+            int cX0 = x;
+            int cMinY = bh;
+            int cMaxY = -1;
+            int quietRun = 0;
+            int cX1 = cX0;
+            while (x < maxLeftScan) {
+                if (colActive[x] >= 2) {
+                    quietRun = 0;
+                    cX1 = x + 1;
+                    if (colMinY[x] < cMinY) cMinY = colMinY[x];
+                    if (colMaxY[x] > cMaxY) cMaxY = colMaxY[x];
+                } else {
+                    quietRun++;
+                    if (quietRun >= 6) break;
                 }
+                x++;
             }
-            x++;
+            int cW = cX1 - cX0;
+            if (cW < 24) {
+                continue; // тонкая внешняя рамка модального окна — идём дальше к самой иконке предмета!
+            }
+            iconX0 = cX0;
+            iconX1 = cX1;
+            iconSpanY = (cMaxY >= cMinY) ? (cMaxY - cMinY + 1) : 0;
+            quietAfterIcon = quietRun;
+            break;
         }
 
-        int iconW = iconX1 - iconX0;
-        int iconSpanY = (iconMaxY >= iconMinY) ? (iconMaxY - iconMinY + 1) : 0;
-        if (iconW < 42 || quietRun < 6 || iconSpanY < Math.max(44, (int) (bh * 0.56f))) {
+        if (iconX0 < 0 || (iconX1 - iconX0) < 42 || quietAfterIcon < 6
+                || iconSpanY < Math.max(44, (int) (bh * 0.54f))) {
             return null;
         }
 
-        int textX0 = iconX1 + 4;
-        while (textX0 < maxLeftScan && colActive[textX0] == 0) {
-            textX0++;
+        int firstTextX = iconX1 + 2;
+        while (firstTextX < maxLeftScan && colActive[firstTextX] == 0) {
+            firstTextX++;
         }
-        textX0 = Math.max(iconX1 + 3, textX0 - 2);
+        int textX0 = Math.max(iconX1 + 2, firstTextX - 5);
 
-        // Отрезаем правые иконки-кнопки [Скин]/[Замок]/[X] за вертикальным зазором >= 8px в правой четверти
+        // Отрезаем внешнюю правую рамку (< 12px) и правые иконки-кнопки [Скин]/[Замок]/[X]
         int textX1 = rw;
         int minRightCheck = Math.max(textX0 + 40, (int) (rw * 0.70f));
         int rx = rw - 1;
-        while (rx >= minRightCheck && colActive[rx] <= 1) rx--;
         while (rx >= minRightCheck) {
+            while (rx >= minRightCheck && colActive[rx] <= 1) rx--;
+            if (rx < minRightCheck) break;
             int btnEnd = rx + 1;
             int rQuiet = 0;
             int btnStart = rx;
@@ -549,9 +565,10 @@ public class IdleArcOcrEngine {
                 rx--;
             }
             int btnW = btnEnd - btnStart;
-            if (rQuiet >= 8 && btnW >= 14 && btnW <= (int) (rw * 0.22f)) {
-                textX1 = btnStart - 4;
-                while (rx >= minRightCheck && colActive[rx] <= 1) rx--;
+            if (rQuiet >= 8 && btnW < 12) {
+                textX1 = btnStart - 2; // тонкая правая рамка окна
+            } else if (rQuiet >= 8 && btnW >= 12 && btnW <= (int) (rw * 0.22f)) {
+                textX1 = btnStart - 4; // кнопка [X] / [Замок]
             } else {
                 break;
             }

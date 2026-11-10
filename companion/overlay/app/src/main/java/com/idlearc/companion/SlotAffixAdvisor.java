@@ -280,41 +280,8 @@ public class SlotAffixAdvisor {
         for (String l : lines) fullSb.append(l).append(' ');
         String all = DruidKnowledgeBase.normalizeForMatch(fullSb.toString());
 
-        // 1. Локализуем шапку открытого предмета: строки непосредственно НАД заголовком «Аффиксы X/5»
-        // (даже если над модалкой попали строки фонового экрана и карточка начинается на 9..15 строке!)
-        int affixHdrIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
-        int winStart;
-        int winEnd;
-        if (affixHdrIdx > 0) {
-            winStart = Math.max(0, affixHdrIdx - 10);
-            winEnd = affixHdrIdx;
-        } else {
-            winStart = 0;
-            winEnd = Math.min(lines.size(), 16);
-            // Останавливаемся перед «Бонус добычи» / «Гнёзда», чтобы названия бонусов добычи не мешали шапке
-            for (int i = 0; i < winEnd; i++) {
-                String low = DruidKnowledgeBase.normalizeForMatch(lines.get(i));
-                if (low.startsWith("бонус добычи") || low.startsWith("гнезд") || low.startsWith("гнёзд")) {
-                    winEnd = i;
-                    break;
-                }
-            }
-        }
-
-        StringBuilder headSb = new StringBuilder();
-        for (int i = winStart; i < winEnd; i++) {
-            String raw = lines.get(i).trim();
-            String low = DruidKnowledgeBase.normalizeForMatch(raw);
-            // Исключаем строки вторичных/врождённых статов с '+', чтобы "+Шанс двойного удара" или "+Сила" не влияли на слот
-            if (raw.startsWith("+") || low.contains("шанс двойного") || low.contains("крит.") || low.contains("уклонен")) {
-                continue;
-            }
-            headSb.append(low).append(' ');
-        }
-        String head = headSb.toString().trim();
-
         // Питомцы и Талисманы (уникальные окна со своими механиками)
-        if (hasStem(head, "талисман") || all.contains("сила атаки талисмана") || all.contains("бонусы жертв")) {
+        if (all.contains("сила атаки талисмана") || all.contains("бонусы жертв")) {
             return GearSlot.TALISMAN;
         }
         if (all.contains("осколки питомцев") || all.contains("особый бонус")
@@ -322,33 +289,63 @@ public class SlotAffixAdvisor {
             return GearSlot.PET;
         }
 
-        // Проход А: точные подзаголовки категории слота в карточке IdleArc («Сапоги», «Перчатки», «Факел», «Вторая рука» и т.д.)
-        GearSlot exactCategory = matchSlotCategorySubtitle(head);
-        if (exactCategory != null) {
-            return exactCategory;
+        // 1. ГЛАВНЫЙ ПРИОРИТЕТ: самая верхняя шапка всплывающей карточки (первые 6 строк открытого попапа:
+        //    название предмета «Факел» / «Рунная палка» / «Перчатки...» и строка «Факел · A5 +5» / «Оружие · A6 +30»)!
+        int affixHdrIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
+        int topHeaderLimit = affixHdrIdx > 0 ? Math.min(affixHdrIdx, 6) : Math.min(lines.size(), 6);
+        StringBuilder topHeaderSb = new StringBuilder();
+        for (int i = 0; i < topHeaderLimit; i++) {
+            String raw = lines.get(i).trim();
+            if (raw.startsWith("+")) continue;
+            String low = DruidKnowledgeBase.normalizeForMatch(raw)
+                    .replace("занимает слот второй руки", "двуручное оружие");
+            if (hasStem(low, "талисман")) return GearSlot.TALISMAN;
+            GearSlot exactLineSlot = matchSlotCategorySubtitle(low);
+            if (exactLineSlot != null) return exactLineSlot;
+            topHeaderSb.append(low).append(' ');
         }
+        String topHeader = topHeaderSb.toString().trim();
+        GearSlot fromTopSub = matchSlotCategorySubtitle(topHeader);
+        if (fromTopSub != null) return fromTopSub;
+        GearSlot fromTopBase = matchItemBaseDictionary(topHeader);
+        if (fromTopBase != null) return fromTopBase;
 
-        // Проход Б: полный словарь всех 322 русских баз предметов + Хэллоуина из libapp.so
-        GearSlot byBaseName = matchItemBaseDictionary(head);
-        if (byBaseName != null) {
-            return byBaseName;
-        }
-
-        // Если шапка оказалась выше окна (например скролл внутри Кузницы), проверяем верхние не-статовые строки
-        if (winStart > 0) {
-            StringBuilder topSb = new StringBuilder();
-            for (int i = 0; i < winStart; i++) {
-                String raw = lines.get(i).trim();
-                if (!raw.startsWith("+")) {
-                    topSb.append(DruidKnowledgeBase.normalizeForMatch(raw)).append(' ');
-                }
+        // 2. Явная подпись ячейки внизу блока АФФИКСЫ («Аффиксы 5/5 · Ячейка Факел уровень 6» / «Ячейка Оружие уровень 6»)
+        //    и плашка двуручного оружия («Двуручное · занимает слот второй руки»)
+        for (String raw : lines) {
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            if (low.contains("занимает слот второй руки") || low.contains("двуручное")) {
+                return GearSlot.WEAPON;
             }
-            String top = topSb.toString().trim();
-            GearSlot fromTop = matchSlotCategorySubtitle(top);
-            if (fromTop != null) return fromTop;
-            fromTop = matchItemBaseDictionary(top);
-            if (fromTop != null) return fromTop;
+            if ((low.contains("ячейка") || low.contains("чейка")) && low.contains("5")) {
+                GearSlot footerSlot = matchSlotCategorySubtitle(low);
+                if (footerSlot != null) return footerSlot;
+                if (low.contains("оруж") || low.contains("сруж")) return GearSlot.WEAPON;
+                if (low.contains("факел") || low.contains("акел")) return GearSlot.TORCH;
+            }
         }
+
+        // 3. Остальные не-статовые строки над «АФФИКСЫ» (с защитой от «занимает слот второй руки»)
+        int winEnd = affixHdrIdx > 0 ? affixHdrIdx : Math.min(lines.size(), 16);
+        StringBuilder headSb = new StringBuilder();
+        for (int i = 0; i < winEnd; i++) {
+            String raw = lines.get(i).trim();
+            String low = DruidKnowledgeBase.normalizeForMatch(raw)
+                    .replace("занимает слот второй руки", "двуручное оружие");
+            if (raw.startsWith("+") || low.contains("шанс двойного") || low.contains("крит.") || low.contains("уклонен")) {
+                continue;
+            }
+            if (low.startsWith("бонус дропа") || low.startsWith("бонус добычи")) {
+                break;
+            }
+            headSb.append(low).append(' ');
+        }
+        String head = headSb.toString().trim();
+        if (hasStem(head, "талисман")) return GearSlot.TALISMAN;
+        GearSlot exactCategory = matchSlotCategorySubtitle(head);
+        if (exactCategory != null) return exactCategory;
+        GearSlot byBaseName = matchItemBaseDictionary(head);
+        if (byBaseName != null) return byBaseName;
 
         // Уникальный вторичный аффикс Факела («Жажда крови») существует ТОЛЬКО на Факеле
         if (all.contains("жажда крови") || all.contains("жажды крови")) {
@@ -375,7 +372,13 @@ public class SlotAffixAdvisor {
 
     private static GearSlot matchSlotCategorySubtitle(String h) {
         if (h == null || h.isEmpty()) return null;
-        if (hasWord(h, "факел") || h.contains("вторая рука") || h.contains("второй руки") || h.contains("левая рука")) {
+        if (h.contains("занимает слот второй руки")) {
+            return GearSlot.WEAPON;
+        }
+        if (hasWord(h, "оружие") || hasWord(h, "двуручное") || hasWord(h, "одноручное")) {
+            return GearSlot.WEAPON;
+        }
+        if (hasWord(h, "факел") || hasWord(h, "акел") || h.contains("вторая рука") || h.contains("левая рука")) {
             return GearSlot.TORCH;
         }
         if (hasWord(h, "перчатки")) return GearSlot.GLOVES;
@@ -385,14 +388,16 @@ public class SlotAffixAdvisor {
         if (hasWord(h, "пояс")) return GearSlot.BELT;
         if (hasWord(h, "амулет")) return GearSlot.AMULET;
         if (hasWord(h, "кольцо")) return GearSlot.RING;
-        if (hasWord(h, "оружие") || hasWord(h, "двуручное") || hasWord(h, "одноручное")) return GearSlot.WEAPON;
         return null;
     }
 
     private static GearSlot matchItemBaseDictionary(String h) {
         if (h == null || h.isEmpty()) return null;
+        if (h.contains("занимает слот второй руки")) {
+            return GearSlot.WEAPON;
+        }
         // 1. Вторая рука / Факел
-        if (hasStem(h, "факел") || h.contains("вторая рука") || h.contains("второй руки")
+        if (hasStem(h, "факел") || h.contains("вторая рука")
                 || h.contains("левая рука") || h.contains("книга заклинаний") || h.contains("старая книга")
                 || hasStem(h, "гримуар") || hasStem(h, "фолиант") || hasStem(h, "колчан")
                 || hasStem(h, "баклер") || hasWord(h, "щит") || hasWord(h, "щита")) {

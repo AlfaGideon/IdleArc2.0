@@ -152,24 +152,33 @@ public class DruidKnowledgeBase {
                 .replace('u', 'и')
                 .replace('x', 'х')
                 .replace('y', 'у');
-        // Исправляем цифры-двойники ТОЛЬКО внутри русских слов (не трогая роллы +28.5%, 5/5, A6 и т.д.)
+        // Исправляем цифры-двойники и оптические подмены Roboto ТОЛЬКО внутри русских слов
         StringBuilder sb = new StringBuilder(low.length());
         for (int i = 0; i < low.length(); i++) {
             char ch = low.charAt(i);
-            boolean prevCyr = i > 0 && low.charAt(i - 1) >= 'а' && low.charAt(i - 1) <= 'я';
+            char prev = i > 0 ? sb.charAt(i - 1) : ' ';
+            boolean prevCyr = prev >= 'а' && prev <= 'я';
             boolean nextCyr = i + 1 < low.length() && low.charAt(i + 1) >= 'а' && low.charAt(i + 1) <= 'я';
             if (ch == '6' && (prevCyr || nextCyr)) {
                 ch = 'б';
             } else if (ch == '0' && prevCyr && nextCyr) {
                 ch = 'о';
-            } else if (ch == '3' && (prevCyr || nextCyr) && !(i > 0 && low.charAt(i - 1) == '+')) {
+            } else if (ch == '3' && (prevCyr || nextCyr) && prev != '+') {
                 ch = 'з';
+            } else if (ch == 'v' && prevCyr && nextCyr) {
+                ch = 'у';
+            } else if (ch == 'э' && "бвгджзйклмнпрстфхцчшщ".indexOf(prev) >= 0) {
+                // В русском языке после согласной в UI-терминах IdleArc стоит «а», которую Roboto путает с «э»
+                ch = 'а';
             }
             sb.append(ch);
         }
         return sb.toString()
                 .replaceAll("[^а-яa-z0-9%+.]", " ")
                 .replaceAll("\\s+", " ")
+                .replace("коита", "крита")
+                .replace("двойного мара", "двойного удара")
+                .replace("двойного дара", "двойного удара")
                 .trim();
     }
 

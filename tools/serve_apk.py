@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v1.4.1.apk"
+APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v1.5.0.apk"
 
 
 def get_meta():
@@ -29,7 +29,7 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v1.4.1.apk"')
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v1.5.0.apk"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -75,10 +75,10 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <div class="card">
-    <h1>🌿 IdleArc Druid Helper v1.4.1</h1>
-    <div class="sub">Прямое чтение названия и типа слота сверху открытой карточки предмета (Факел / Перчатки / Сапоги / Шлем / Броня / Пояс / Амулет / Кольцо / Оружие) + подбор 5/5 аффиксов</div>
-    <a class="btn" href="download/IdleArc-DruidHelper-v1.4.1.apk" download="IdleArc-DruidHelper-v1.4.1.apk">
-      📲 СКАЧАТЬ APK v1.4.1 ({kb:.1f} КБ)
+    <h1>🌿 IdleArc Druid Helper v1.5.0</h1>
+    <div class="sub">Откалибровано 1-в-1 по реальным карточкам Факела и Рунной палки: точные 5/5 аффиксов, римские уровни Пробуждения (I / II / III) и реальные таблицы роллов IdleArc 1.3.15</div>
+    <a class="btn" href="download/IdleArc-DruidHelper-v1.5.0.apk" download="IdleArc-DruidHelper-v1.5.0.apk">
+      📲 СКАЧАТЬ APK v1.5.0 ({kb:.1f} КБ)
     </a>
     <div class="meta">
       <b>Пакет:</b> com.idlearc.companion (minSdk 24 / targetSdk 34)<br>
