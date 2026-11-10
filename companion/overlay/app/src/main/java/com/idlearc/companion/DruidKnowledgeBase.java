@@ -167,8 +167,17 @@ public class DruidKnowledgeBase {
                 ch = 'о';
             } else if (ch == '3' && (prevCyr || nextCyr) && prev != '+') {
                 ch = 'з';
-            } else if (ch == 'v' && prevCyr && nextCyr) {
+            } else if (ch == 'r' && (prevCyr || nextCyr)) {
+                // В шрифте Roboto строчная русская «г» часто совпадает по глифу с латинской «r» («двойноrо»)
+                ch = 'г';
+            } else if (ch == 'v' && (prevCyr || nextCyr)) {
                 ch = 'у';
+            } else if (ch == 'g' && prevCyr && nextCyr) {
+                ch = 'д';
+            } else if (ch == 'w' && (prevCyr || nextCyr)) {
+                ch = 'ш';
+            } else if (ch == 'й') {
+                // Унифицируем «й»/«и» только в устойчивых заменах ниже, здесь оставляем «й»
             } else if (ch == 'э' && "бвгджзйклмнпрстфхцчшщ".indexOf(prev) >= 0) {
                 ch = 'а';
             }
@@ -178,8 +187,13 @@ public class DruidKnowledgeBase {
                 .replaceAll("[^а-яa-z0-9%+.]", " ")
                 .replaceAll("\\s+", " ")
                 .replace("коита", "крита")
+                .replace("коит.", "крит.")
+                .replace("двсйного", "двойного")
+                .replace("двоиного", "двойного")
                 .replace("двойного мара", "двойного удара")
                 .replace("двойного дара", "двойного удара")
+                .replace("здорсвье", "здоровье")
+                .replace("убииств", "убийств")
                 .replace("снижениеурона", "снижение урона")
                 .replace("шансуклонения", "шанс уклонения")
                 .replace("здоровьезаудар", "здоровье за удар")

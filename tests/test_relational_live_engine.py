@@ -237,6 +237,79 @@ public class RelationalSuite {
             }
         }
 
+        // 5. Регрессионный тест на устойчивость к оптическим искажениям OCR (двойноrо, nитомца, Аф()НксЬ,
+        // самоцветы и Спутника ВЫШЕ аффиксов, двухстрочный перенос с зазором >60px):
+        // НИ ОДНА из 5 строк не должна пропадать или сдвигать позиции #2..#5, и симулятор НИКОГДА не должен
+        // предлагать аффикс, который уже присутствует на другой строке этого же предмета!
+        List<IdleArcOcrEngine.OcrLine> noisyCard = Arrays.asList(
+                new IdleArcOcrEngine.OcrLine("Шлем · А6 +19", 260, 300, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("+6862 Защита", 520, 560, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("ГНЁЗДА", 900, 935, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("+4.26% Шанс крита", 960, 995, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Спутника: +50.6% Урон питомца", 1360, 1400, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Аф()НксЬ 5/5", 1520, 1555, 0f, 0.25f, 0, 220),
+                new IdleArcOcrEngine.OcrLine(". Бонус золота +91% l", 1595, 1632, 0.12f, 0f, 1, 220),
+                new IdleArcOcrEngine.OcrLine(". Шанс двойноrо урона +55% l", 1668, 1705, 0.12f, 0f, 1, 220),
+                new IdleArcOcrEngine.OcrLine(". Коит. урон +55% l", 1741, 1778, 0.12f, 0f, 1, 220),
+                new IdleArcOcrEngine.OcrLine(". Шанс крита", 1810, 1842, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("+55% l", 1905, 1938, 0.12f, 0f, 1, 220),
+                new IdleArcOcrEngine.OcrLine(". Урон nитомца +480% ll", 1975, 2012, 0.16f, 0f, 2, 220),
+                new IdleArcOcrEngine.OcrLine("Аффиксы 5/5 Ячейка Шлем уровень 6", 2040, 2075, 0f, 0f, 0, 200)
+        );
+        AffixPositionOptimizer.OptimizationReport noisyRep =
+                AffixPositionOptimizer.analyzeItemAffixes(noisyCard, GearSlot.HELMET, scannedFromScreenshots, true);
+        if (noisyRep == null || noisyRep.currentRows.size() != 5) {
+            throw new AssertionError("Expected all 5 rows preserved under OCR noise, got: "
+                    + (noisyRep == null ? "null" : noisyRep.currentRows.size()));
+        }
+        AffixType[] expectedOrder = {
+                AffixType.GOLD_GAIN,
+                AffixType.DOUBLE_DAMAGE,
+                AffixType.CRIT_DAMAGE,
+                AffixType.CRIT_CHANCE,
+                AffixType.PET_DAMAGE
+        };
+        for (int idx = 0; idx < 5; idx++) {
+            if (noisyRep.currentRows.get(idx).type != expectedOrder[idx]) {
+                throw new AssertionError("Row #" + (idx + 1) + " shifted or misclassified: expected "
+                        + expectedOrder[idx] + ", got " + noisyRep.currentRows.get(idx).type);
+            }
+        }
+        if (new HashSet<>(noisyRep.idealByPos).size() != 5 || noisyRep.idealByPos.get(0) == AffixType.DOUBLE_DAMAGE) {
+            throw new AssertionError("Duplicate or shifted stat recommended on Position #1: " + noisyRep.idealByPos);
+        }
+
+        // Тот же предмет вообще БЕЗ распознанного заголовка «АФФИКСЫ» (например, обрезан или стёрт бликом)
+        List<IdleArcOcrEngine.OcrLine> headerlessCard = new ArrayList<>(noisyCard);
+        headerlessCard.set(5, new IdleArcOcrEngine.OcrLine("---", 1520, 1555, 0f, 0f, 0, 120));
+        AffixPositionOptimizer.OptimizationReport headerlessRep =
+                AffixPositionOptimizer.analyzeItemAffixes(headerlessCard, GearSlot.HELMET, scannedFromScreenshots, true);
+        if (headerlessRep == null || headerlessRep.currentRows.size() != 5) {
+            throw new AssertionError("Headerless card dropped rows: got "
+                    + (headerlessRep == null ? "null" : headerlessRep.currentRows.size()));
+        }
+        for (int idx = 0; idx < 5; idx++) {
+            if (headerlessRep.currentRows.get(idx).type != expectedOrder[idx]) {
+                throw new AssertionError("Headerless card row #" + (idx + 1) + " shifted: got "
+                        + headerlessRep.currentRows.get(idx).type);
+            }
+        }
+
+        File realBugHelmet = new File(rootDir, "Screenshot_20261111-014922.png");
+        if (realBugHelmet.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(realBugHelmet, wh);
+            if (!ScreenAnalyzer.detectRedUnequipButton(argb, wh[0], wh[1])) {
+                throw new AssertionError("Expected detectRedUnequipButton=true on Screenshot_20261111-014922.png");
+            }
+            ScreenAnalyzer.ScanResult hRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
+            if (!hRes.shortBadge.contains("1/5") || !hRes.details.contains("Позиция #5")
+                    || !hRes.details.contains("[НАДЕТО на герое]")) {
+                throw new AssertionError("Buggy 1/4 shift recurred on Screenshot_20261111-014922.png: "
+                        + hRes.shortBadge + " | " + hRes.details);
+            }
+        }
+
         // Прогон реальных скриншотов карточек предметов с живым отсканированным профилем
         File[] allPngs = rootDir.listFiles((dir, name) -> name.endsWith(".png"));
         int analyzedPngs = 0;

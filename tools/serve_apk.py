@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.0.0 APK в 1 клик."""
+"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.0.1 APK в 1 клик."""
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.0.0.apk"
+APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.0.1.apk"
 
 
 def get_meta():
@@ -20,6 +20,24 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
 
+    def do_HEAD(self):
+        if self.path.startswith("/download") or self.path.endswith(".apk"):
+            if not APK_PATH.exists():
+                self.send_error(404)
+                return
+            data, _, _ = get_meta()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/vnd.android.package-archive")
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.1.apk"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+
     def do_GET(self):
         if self.path.startswith("/download") or self.path.endswith(".apk"):
             if not APK_PATH.exists():
@@ -29,7 +47,7 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.0.apk"')
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.1.apk"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -48,7 +66,7 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IdleArc Druid Helper v2.0.0 APK</title>
+  <title>IdleArc Druid Helper v2.0.1 APK</title>
   <style>
     body {{
       margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -75,19 +93,19 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <div class="card">
-    <h1>🌿 IdleArc Druid Helper v2.0.0</h1>
-    <div class="sub">Чистый визуальный OCR-сканер + реляционный математический симулятор (0% захардкоженных статов или предзаданных пар замен): вычисляет лучший параметр строго по отношению к текущим характеристикам персонажа и самого предмета</div>
-    <a class="btn" href="download/IdleArc-DruidHelper-v2.0.0.apk" download="IdleArc-DruidHelper-v2.0.0.apk">
-      📲 СКАЧАТЬ APK v2.0.0 ({kb:.1f} КБ)
+    <h1>🌿 IdleArc Druid Helper v2.0.1</h1>
+    <div class="sub">Фикс точного чтения всех 5 позиций аффиксов (#1..#5) без пропуска и сдвига строк + живой реляционный математический симулятор</div>
+    <a class="btn" href="download/IdleArc-DruidHelper-v2.0.1.apk" download="IdleArc-DruidHelper-v2.0.1.apk">
+      📲 СКАЧАТЬ APK v2.0.1 ({kb:.1f} КБ)
     </a>
     <div class="meta">
-      <b>Пакет:</b> com.idlearc.companion · versionCode 200 (minSdk 24 / targetSdk 34)<br>
+      <b>Пакет:</b> com.idlearc.companion · versionCode 201 (minSdk 24 / targetSdk 34)<br>
       <b>SHA-256:</b> {sha}
     </div>
     <ul>
-      <li><b>Никакого хардкода статов или готовых ответов:</b> профиль на старте чистый — открой «Характеристики персонажа» и нажми 🔍 СКАН, чтобы приложение считало твои реальные числа с экрана.</li>
-      <li><b>Честный относительный расчёт (LiveBuildSimulator):</b> для надетого предмета («Снять») вычитает стат проверяемой строки из профиля и прогоняет полный комбинаторный перебор C(|пул|, k) всех допустимых аффиксов слота по формулам игры.</li>
-      <li><b>Прозрачная математика на каждой позиции:</b> выводит точные % ΔDPS / % ΔEHP / % ΔФарм и живой топ-3 свободных кандидатов с чистым выигрышем относительно текущего ролла.</li>
+      <li><b>Исправлено чтение 5/5 строк и нумерации позиций:</b> двухступенчатый классификатор (точный + нечёткий Levenshtein по пулу слота) и расширенная нормализация кириллицы/латиницы исключают пропуск строки (например, <code>двойноrо</code>) и сдвиг позиций #2..#5.</li>
+      <li><b>Защита от дубликатов аффиксов на предмете:</b> симулятор строго фиксирует уже стоящие на предмете статы на своих строках и никогда не советует роллить аффикс, который уже есть на другой позиции этого предмета.</li>
+      <li><b>Визуальная детекция надетого предмета:</b> распознаёт бордовую кнопку «Снять» даже при частичном перекрытии текста.</li>
     </ul>
   </div>
 </body>

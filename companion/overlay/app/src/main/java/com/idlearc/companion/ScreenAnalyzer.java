@@ -194,8 +194,9 @@ public class ScreenAnalyzer {
         }
 
         if (!equipGridNoModal) {
+            boolean equippedVisualHint = detectRedUnequipButton(argb, w, h);
             AffixPositionOptimizer.OptimizationReport opt =
-                    AffixPositionOptimizer.analyzeItemAffixes(metaLines, detectedSlot, profile);
+                    AffixPositionOptimizer.analyzeItemAffixes(metaLines, detectedSlot, profile, equippedVisualHint);
             if (opt != null && (isSingleItemPopup(lowAll) || detectedSlot != null || opt.currentRows.size() >= 2)) {
                 res.isAffixItemScan = true;
                 res.detectedSlot = opt.slotInferredFromAffixes ? null : opt.slot;
@@ -598,5 +599,34 @@ public class ScreenAnalyzer {
             }
         }
         return Math.min(10, greenClusters);
+    }
+
+    /**
+     * Визуальная детекция бордово-красной кнопки «Снять» в левой нижней части модального окна предмета
+     * (страхует случай, когда текст кнопки перекрыт или искажён).
+     */
+    public static boolean detectRedUnequipButton(int[] argb, int w, int h) {
+        if (argb == null || w < 100 || h < 100 || argb.length < w * h) return false;
+        int x0 = (int) (w * 0.09), x1 = (int) (w * 0.27);
+        int y0 = (int) (h * 0.81), y1 = (int) (h * 0.91);
+        int step = Math.max(3, w / 250);
+        int burgundyPx = 0;
+        int crimsonPx = 0;
+        int totalPx = 0;
+        for (int y = y0; y < y1; y += step) {
+            int off = y * w;
+            for (int x = x0; x < x1; x += step) {
+                int c = argb[off + x];
+                int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+                totalPx++;
+                if (r >= 48 && g <= 54 && b <= 54 && (r - g) >= 22 && (r - b) >= 18) {
+                    burgundyPx++;
+                }
+                if (r >= 95 && (r - g) >= 40 && (r - b) >= 35) {
+                    crimsonPx++;
+                }
+            }
+        }
+        return totalPx > 0 && burgundyPx >= (totalPx * 16) / 100 && crimsonPx >= Math.max(8, totalPx / 120);
     }
 }
