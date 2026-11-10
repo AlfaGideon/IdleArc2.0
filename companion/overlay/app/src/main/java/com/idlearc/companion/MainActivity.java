@@ -65,7 +65,7 @@ public class MainActivity extends Activity {
 
         // Заголовок
         TextView headerTitle = new TextView(this);
-        headerTitle.setText("🌿 IdleArc Druid Helper v1.4.0");
+        headerTitle.setText("🌿 IdleArc Druid Helper v1.4.1");
         headerTitle.setTextColor(0xFF34D399);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);

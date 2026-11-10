@@ -429,27 +429,33 @@ public class IdleArcOcrEngine {
 
     private static boolean trySplitBandIgnoringSideIcons(
             float[][] diff, int by0, int by1, int rw, int maxLineH, List<int[]> out, boolean requireMultiLine) {
-        // Пробуем 3 горизонтальных текстовых окна:
-        //  1) [38%..74%] — обходит даже крупную квадратную иконку 240px слева (x=155..395 на 1080p) и кнопки [Скин]/[Замок]/[X] справа;
-        //  2) [26%..76%] — ловит короткие названия («Факел», «Пояс», «Шлем») рядом с компактной иконкой;
-        //  3) [44%..84%] — запасное окно под широкие превью.
-        float[][] windows = {
-            {0.38f, 0.74f},
-            {0.26f, 0.76f},
-            {0.44f, 0.84f}
-        };
+        // Шаг 1 (точный геометрический): находим вертикальный пустой зазор между квадратной иконкой слева и текстом шапки!
+        // Это сохраняет даже короткие однословные названия у самого края иконки («Факел», «Пояс», «Шлем», «Перчатки», «Сапоги»).
+        int[] exactCols = findHeaderTextRangeAfterLeftIcon(diff, by0, by1, rw);
         List<int[]> bestSub = null;
-        for (float[] win : windows) {
-            List<int[]> candidate = splitBandWithProbeWindow(diff, by0, by1, rw, maxLineH, win[0], win[1]);
-            if (candidate != null && !candidate.isEmpty()) {
-                if (bestSub == null || candidate.size() > bestSub.size()) {
-                    bestSub = candidate;
-                }
-                if (bestSub.size() >= 2 && win[0] >= 0.37f) {
-                    break;
+        if (exactCols != null) {
+            bestSub = segmentSubLinesInRange(diff, by0, by1, exactCols[0], exactCols[1], maxLineH);
+        }
+
+        // Шаг 2 (запасной, если рамка иконки слилась с текстом без зазора): проверяем все окна без раннего выхода,
+        // выбирая максимум найденных строк (а при равенстве — самое левое окно, чтобы не потерять короткую 1-ю строку!).
+        if (bestSub == null || bestSub.size() < 2) {
+            float[][] windows = {
+                {0.24f, 0.76f},
+                {0.32f, 0.76f},
+                {0.39f, 0.76f},
+                {0.45f, 0.84f}
+            };
+            for (float[] win : windows) {
+                List<int[]> candidate = splitBandWithProbeWindow(diff, by0, by1, rw, maxLineH, win[0], win[1]);
+                if (candidate != null && !candidate.isEmpty()) {
+                    if (bestSub == null || candidate.size() > bestSub.size()) {
+                        bestSub = candidate;
+                    }
                 }
             }
         }
+
         if (bestSub == null || bestSub.isEmpty()) {
             return false;
         }
@@ -458,6 +464,148 @@ public class IdleArcOcrEngine {
         }
         out.addAll(bestSub);
         return true;
+    }
+
+    /**
+     * Находит точный горизонтальный диапазон [textX0, textX1) текста шапки карточки предмета:
+     * отрезает слева квадратный блок иконки (шириной >= 42px и вертикальным охватом >= 56% полосы),
+     * за которым идёт чистый вертикальный зазор >= 6px, а справа — кнопки [Скин]/[Замок]/[X].
+     */
+    private static int[] findHeaderTextRangeAfterLeftIcon(float[][] diff, int by0, int by1, int rw) {
+        int bh = by1 - by0;
+        if (rw < 80 || bh < 44) return null;
+
+        int[] colActive = new int[rw];
+        int[] colMinY = new int[rw];
+        int[] colMaxY = new int[rw];
+        Arrays.fill(colMinY, bh);
+        Arrays.fill(colMaxY, -1);
+
+        for (int i = 0; i < bh; i++) {
+            float[] dRow = diff[by0 + i];
+            for (int x = 0; x < rw; x++) {
+                if (dRow[x] > 0.32f) {
+                    colActive[x]++;
+                    if (i < colMinY[x]) colMinY[x] = i;
+                    if (i > colMaxY[x]) colMaxY[x] = i;
+                }
+            }
+        }
+
+        int maxLeftScan = (int) (rw * 0.50f);
+        int x = 0;
+        while (x < maxLeftScan && colActive[x] <= 1) x++;
+        if (x >= (int) (rw * 0.30f)) return null;
+
+        int iconX0 = x;
+        int iconMinY = bh;
+        int iconMaxY = -1;
+        int quietRun = 0;
+        int iconX1 = iconX0;
+        while (x < maxLeftScan) {
+            if (colActive[x] >= 2) {
+                quietRun = 0;
+                iconX1 = x + 1;
+                if (colMinY[x] < iconMinY) iconMinY = colMinY[x];
+                if (colMaxY[x] > iconMaxY) iconMaxY = colMaxY[x];
+            } else {
+                quietRun++;
+                if (quietRun >= 6) {
+                    break;
+                }
+            }
+            x++;
+        }
+
+        int iconW = iconX1 - iconX0;
+        int iconSpanY = (iconMaxY >= iconMinY) ? (iconMaxY - iconMinY + 1) : 0;
+        if (iconW < 42 || quietRun < 6 || iconSpanY < Math.max(44, (int) (bh * 0.56f))) {
+            return null;
+        }
+
+        int textX0 = iconX1 + 4;
+        while (textX0 < maxLeftScan && colActive[textX0] == 0) {
+            textX0++;
+        }
+        textX0 = Math.max(iconX1 + 3, textX0 - 2);
+
+        // Отрезаем правые иконки-кнопки [Скин]/[Замок]/[X] за вертикальным зазором >= 8px в правой четверти
+        int textX1 = rw;
+        int minRightCheck = Math.max(textX0 + 40, (int) (rw * 0.70f));
+        int rx = rw - 1;
+        while (rx >= minRightCheck && colActive[rx] <= 1) rx--;
+        while (rx >= minRightCheck) {
+            int btnEnd = rx + 1;
+            int rQuiet = 0;
+            int btnStart = rx;
+            while (rx >= minRightCheck) {
+                if (colActive[rx] >= 2) {
+                    rQuiet = 0;
+                    btnStart = rx;
+                } else {
+                    rQuiet++;
+                    if (rQuiet >= 8) break;
+                }
+                rx--;
+            }
+            int btnW = btnEnd - btnStart;
+            if (rQuiet >= 8 && btnW >= 14 && btnW <= (int) (rw * 0.22f)) {
+                textX1 = btnStart - 4;
+                while (rx >= minRightCheck && colActive[rx] <= 1) rx--;
+            } else {
+                break;
+            }
+        }
+
+        if (textX1 - textX0 < 36) return null;
+        return new int[]{textX0, textX1};
+    }
+
+    private static List<int[]> segmentSubLinesInRange(
+            float[][] diff, int by0, int by1, int lx0, int lx1, int maxLineH) {
+        int bh = by1 - by0;
+        int[] rowCnt = new int[bh];
+        for (int i = 0; i < bh; i++) {
+            float[] dRow = diff[by0 + i];
+            int c = 0;
+            for (int x = lx0; x < lx1; x++) {
+                if (dRow[x] > 0.34f) c++;
+            }
+            rowCnt[i] = c;
+        }
+
+        List<int[]> sub = new ArrayList<>();
+        boolean inSub = false;
+        int s0 = 0;
+        for (int i = 0; i <= bh; i++) {
+            int c = (i < bh) ? rowCnt[i] : 0;
+            if (!inSub && c >= 4) {
+                inSub = true;
+                s0 = i;
+            } else if (inSub && (i == bh || c <= 1)) {
+                inSub = false;
+                int sh = i - s0;
+                if (sh >= 12 && sh <= maxLineH) {
+                    sub.add(new int[]{by0 + s0, by0 + i, lx0, lx1});
+                } else if (sh > maxLineH && sh <= maxLineH * 2 + 28) {
+                    int searchFrom = s0 + sh / 3;
+                    int searchTo = i - sh / 3;
+                    int bestIdx = -1;
+                    int bestVal = Integer.MAX_VALUE;
+                    for (int k = searchFrom; k <= searchTo; k++) {
+                        if (rowCnt[k] < bestVal) {
+                            bestVal = rowCnt[k];
+                            bestIdx = k;
+                        }
+                    }
+                    if (bestIdx > s0 + 11 && i - bestIdx >= 12 && bestVal <= 8) {
+                        sub.add(new int[]{by0 + s0, by0 + bestIdx, lx0, lx1});
+                        sub.add(new int[]{by0 + bestIdx, by0 + i, lx0, lx1});
+                    }
+                }
+            }
+        }
+        return sub;
     }
 
     private static List<int[]> splitBandWithProbeWindow(
@@ -479,7 +627,6 @@ public class IdleArcOcrEngine {
             if (c <= 1) gapRows++;
         }
 
-        // На строках-промежутках (midCnt <= 1) определяем точную правую границу левой иконки предмета (вплоть до 52% ширины!)
         int lx0 = 0;
         int lx1 = rw;
         if (gapRows >= 3) {
@@ -519,38 +666,7 @@ public class IdleArcOcrEngine {
             lx1 = Math.min(rw, (int) (rw * 0.86f));
         }
 
-        List<int[]> sub = new ArrayList<>();
-        boolean inSub = false;
-        int s0 = 0;
-        for (int i = 0; i <= bh; i++) {
-            int c = (i < bh) ? midCnt[i] : 0;
-            if (!inSub && c >= 4) {
-                inSub = true;
-                s0 = i;
-            } else if (inSub && (i == bh || c <= 1)) {
-                inSub = false;
-                int sh = i - s0;
-                if (sh >= 12 && sh <= maxLineH) {
-                    sub.add(new int[]{by0 + s0, by0 + i, lx0, lx1});
-                } else if (sh > maxLineH && sh <= maxLineH * 2 + 28) {
-                    int searchFrom = s0 + sh / 3;
-                    int searchTo = i - sh / 3;
-                    int bestIdx = -1;
-                    int bestVal = Integer.MAX_VALUE;
-                    for (int k = searchFrom; k <= searchTo; k++) {
-                        if (midCnt[k] < bestVal) {
-                            bestVal = midCnt[k];
-                            bestIdx = k;
-                        }
-                    }
-                    if (bestIdx > s0 + 11 && i - bestIdx >= 12 && bestVal <= 8) {
-                        sub.add(new int[]{by0 + s0, by0 + bestIdx, lx0, lx1});
-                        sub.add(new int[]{by0 + bestIdx, by0 + i, lx0, lx1});
-                    }
-                }
-            }
-        }
-        return sub;
+        return segmentSubLinesInRange(diff, by0, by1, lx0, lx1, maxLineH);
     }
 
     private char matchGlyph(float[][] diff, int x0, int x1, int cy0, int cy1, int ly0, int lh, float[] patchBuf) {

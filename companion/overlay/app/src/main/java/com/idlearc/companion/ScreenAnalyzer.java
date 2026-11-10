@@ -161,17 +161,22 @@ public class ScreenAnalyzer {
                 ? null
                 : SlotAffixAdvisor.detectSlotFromModalLines(metaLines);
 
-        // Запасной прицельный проход OCR строго по текстовой колонке шапки СПРАВА от крупной иконки предмета
-        // (x = 32%..84% ширины экрана, где нет ни левой квадратной иконки DetailPopupHeader, ни правых кнопок [Скин]/[Замок]/[X]!)
+        // Запасной прицельный проход OCR прямо по верхней шапке всплывающей карточки (где ВСЕГДА написано название/слот):
+        // пробуем и под компактную иконку (x = 22%..84%, чтобы не обрезать короткие слова «Факел» / «Пояс» / «Шлем»!),
+        // и под крупную иконку (x = 34%..84%).
         if (detectedSlot == null && !equipGridNoModal && (hasOpenItemCardMarkers || isSingleItemPopup(lowAll))) {
             int hdrBottomY = (int) (h * 0.55);
             int affIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
             if (affIdx >= 0 && affIdx < metaLines.size()) {
                 hdrBottomY = Math.max((int) (h * 0.22), metaLines.get(affIdx).y0);
             }
-            List<IdleArcOcrEngine.OcrLine> hdrRightCol = ocr.recognizeLinesWithMeta(
-                    argb, w, h, (int) (w * 0.32), (int) (h * 0.08), (int) (w * 0.84), hdrBottomY);
-            detectedSlot = SlotAffixAdvisor.detectSlotFromModalLines(hdrRightCol);
+            float[] leftCrops = {0.22f, 0.34f};
+            for (float lx : leftCrops) {
+                List<IdleArcOcrEngine.OcrLine> hdrCol = ocr.recognizeLinesWithMeta(
+                        argb, w, h, (int) (w * lx), (int) (h * 0.08), (int) (w * 0.84), hdrBottomY);
+                detectedSlot = SlotAffixAdvisor.detectSlotFromModalLines(hdrCol);
+                if (detectedSlot != null) break;
+            }
         }
 
         if (!equipGridNoModal) {
