@@ -26,8 +26,10 @@ public class ScreenAnalyzer {
         public String details = "";
         public VerdictColor color = VerdictColor.GOOD;
         public boolean profileUpdated = false;
+        public boolean isAffixItemScan = false;
         public SlotAffixAdvisor.GearSlot detectedSlot = null;
         public List<String> rawLines = new ArrayList<>();
+        public List<IdleArcOcrEngine.OcrLine> ocrLines = new ArrayList<>();
     }
 
     private static final Pattern PAREN_PCT = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)%\\s*\\(\\s*([0-9]+(?:[.,][0-9]+)?)");
@@ -46,17 +48,27 @@ public class ScreenAnalyzer {
         int ry0 = (int) (h * 0.08);
         int ry1 = (int) (h * 0.90);
 
-        List<String> lines = ocr.recognizeRegion(argb, w, h, rx0, ry0, rx1, ry1);
+        List<IdleArcOcrEngine.OcrLine> metaLines = ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1);
+        List<String> lines = new ArrayList<>(metaLines.size());
+        for (IdleArcOcrEngine.OcrLine ml : metaLines) {
+            lines.add(ml.text);
+        }
         res.rawLines = lines;
+        res.ocrLines = metaLines;
 
         StringBuilder joinedSb = new StringBuilder();
         for (String l : lines) joinedSb.append(l).append('\n');
         String joined = joinedSb.toString();
         String lowAll = DruidKnowledgeBase.normalizeForMatch(joined);
 
-        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА»
-        if (lowAll.contains("характеристики персонажа") || (lowAll.contains("шанс двойного") && lowAll.contains("уклонен"))
-                || (lowAll.contains("множитель добычи") && lowAll.contains("питомца"))) {
+        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА» (не путать с карточкой предмета, где одновременно выпали Двойной удар и Уклонение!)
+        boolean hasItemModalMarkers = lowAll.contains("аффикс") || lowAll.contains("надеть")
+                || lowAll.contains("гнезд") || lowAll.contains("гнёзд") || lowAll.contains("переков")
+                || lowAll.contains("разобрать") || lowAll.contains("пробужд");
+        boolean isCharStatsSheet = lowAll.contains("характеристики персонажа")
+                || (!hasItemModalMarkers && lowAll.contains("шанс блока") && lowAll.contains("возмезд"))
+                || (!hasItemModalMarkers && lowAll.contains("множитель добычи") && lowAll.contains("рубин"));
+        if (isCharStatsSheet) {
             res.screenType = "Характеристики персонажа";
             int updatedCount = updateProfileFromStatsLines(lines, profile);
             res.profileUpdated = (updatedCount > 0);
@@ -136,37 +148,36 @@ public class ScreenAnalyzer {
             return analyzeItemComparison(ocr, argb, w, h, profile);
         }
 
-        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / КУЗНИЦЫ / ПРОБУЖДЕНИЯ (★) / ТАЛИСМАНА / ПИТОМЦА
+        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / ПОЗИЦИЙ АФФИКСОВ КУЗНИЦЫ (ИНТЕЛЛЕКТУАЛЬНЫЙ ПОДБОР ПО МЕСТАМ #1..#N)
         boolean equipGridNoModal = (lowAll.contains("кодекс") && lowAll.contains("автонадписи"))
                 && !lowAll.contains("надеть") && !lowAll.contains("разобрать") && !lowAll.contains("перераспредел");
         SlotAffixAdvisor.GearSlot detectedSlot = equipGridNoModal ? null : SlotAffixAdvisor.detectSlotFromLines(lines);
+
+        if (!equipGridNoModal) {
+            AffixPositionOptimizer.OptimizationReport opt =
+                    AffixPositionOptimizer.analyzeItemAffixes(metaLines, detectedSlot, profile);
+            if (opt != null && (isSingleItemPopup(lowAll) || detectedSlot != null || opt.currentRows.size() >= 2)) {
+                res.isAffixItemScan = true;
+                res.detectedSlot = opt.slot;
+                res.screenType = opt.slot.shortChip + " · По-позиционный подбор (" + profile.mode.title + ")";
+                res.shortBadge = opt.shortBadge;
+                res.headline = opt.headline;
+                res.color = opt.verdictColor;
+                res.details = opt.details;
+                return res;
+            }
+        }
+
         if (!equipGridNoModal && (isSingleItemPopup(lowAll) || detectedSlot != null)) {
             res.detectedSlot = detectedSlot;
             DruidKnowledgeBase.ItemEvaluation ev = DruidKnowledgeBase.evaluateItemLines(lines, profile);
-            // На защитных слотах (Шлем, Броня, Пояс, Сапоги) нет оружейных множителей — нормируем шкалу под слот!
-            if (detectedSlot == SlotAffixAdvisor.GearSlot.HELMET
-                    || detectedSlot == SlotAffixAdvisor.GearSlot.CHEST
-                    || detectedSlot == SlotAffixAdvisor.GearSlot.BELT
-                    || detectedSlot == SlotAffixAdvisor.GearSlot.BOOTS) {
-                ev.totalScore *= 1.45;
-                recomputeGrade(ev);
-            }
-
             String slotLabel = detectedSlot != null ? detectedSlot.shortChip : "Предмет";
-            res.screenType = slotLabel + " · Аффиксы и ★ (" + profile.mode.title + ")";
+            res.screenType = slotLabel + " (" + profile.mode.title + ")";
             res.shortBadge = slotLabel + ": " + ev.tierGrade;
-            if (ev.totalScore >= 52) {
-                res.color = VerdictColor.GOOD;
-                res.headline = "✅ " + slotLabel + " — " + ev.tierGrade + (ev.tierTagFound.isEmpty() ? "" : " [" + ev.tierTagFound + "]");
-            } else if (ev.totalScore >= 25) {
-                res.color = VerdictColor.WARN;
-                res.headline = "⚖️ " + slotLabel + " — " + ev.tierGrade + " (можно докрутить)";
-            } else {
-                res.color = VerdictColor.BAD;
-                res.headline = "❌ " + slotLabel + " — " + ev.tierGrade;
-            }
-            res.details = formatItemEvalDetails(ev, profile)
-                    + "\n" + SlotAffixAdvisor.buildScannedItemSlotAdvice(detectedSlot, lines, profile);
+            res.color = ev.totalScore >= 52 ? VerdictColor.GOOD
+                      : (ev.totalScore >= 25 ? VerdictColor.WARN : VerdictColor.BAD);
+            res.headline = slotLabel + " — " + ev.tierGrade;
+            res.details = formatItemEvalDetails(ev, profile);
             return res;
         }
 
@@ -206,16 +217,33 @@ public class ScreenAnalyzer {
         return res;
     }
 
+    public static void recomputeAffixScan(ScanResult res, SlotAffixAdvisor.GearSlot slotOverride, DruidProfile profile) {
+        if (res == null || !res.isAffixItemScan || res.ocrLines == null || res.ocrLines.isEmpty()) return;
+        AffixPositionOptimizer.OptimizationReport opt =
+                AffixPositionOptimizer.analyzeItemAffixes(res.ocrLines, slotOverride, profile);
+        if (opt != null) {
+            res.detectedSlot = opt.slot;
+            res.screenType = opt.slot.shortChip + " · По-позиционный подбор (" + profile.mode.title + ")";
+            res.shortBadge = opt.shortBadge;
+            res.headline = opt.headline;
+            res.color = opt.verdictColor;
+            res.details = opt.details;
+        }
+    }
+
     private static ScanResult analyzeItemComparison(IdleArcOcrEngine ocr, int[] argb, int w, int h, DruidProfile profile) {
         ScanResult res = new ScanResult();
         res.screenType = "Сравнение предметов";
 
-        // Пробуем и вертикальное (Верх = Надето, Низ = Кандидат), и горизонтальное (Лево vs Право) деление
-        List<String> topLines = ocr.recognizeRegion(argb, w, h, (int) (w * 0.05), (int) (h * 0.10), (int) (w * 0.95), (int) (h * 0.49));
-        List<String> botLines = ocr.recognizeRegion(argb, w, h, (int) (w * 0.05), (int) (h * 0.49), (int) (w * 0.95), (int) (h * 0.88));
+        List<IdleArcOcrEngine.OcrLine> topMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.05), (int) (h * 0.10), (int) (w * 0.95), (int) (h * 0.49));
+        List<IdleArcOcrEngine.OcrLine> botMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.05), (int) (h * 0.49), (int) (w * 0.95), (int) (h * 0.88));
+        List<IdleArcOcrEngine.OcrLine> leftMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.03), (int) (h * 0.14), (int) (w * 0.50), (int) (h * 0.86));
+        List<IdleArcOcrEngine.OcrLine> rightMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.50), (int) (h * 0.14), (int) (w * 0.97), (int) (h * 0.86));
 
-        List<String> leftLines = ocr.recognizeRegion(argb, w, h, (int) (w * 0.03), (int) (h * 0.14), (int) (w * 0.50), (int) (h * 0.86));
-        List<String> rightLines = ocr.recognizeRegion(argb, w, h, (int) (w * 0.50), (int) (h * 0.14), (int) (w * 0.97), (int) (h * 0.86));
+        List<String> topLines = toPlain(topMeta);
+        List<String> botLines = toPlain(botMeta);
+        List<String> leftLines = toPlain(leftMeta);
+        List<String> rightLines = toPlain(rightMeta);
 
         DruidKnowledgeBase.ItemEvaluation evTop = DruidKnowledgeBase.evaluateItemLines(topLines, profile);
         DruidKnowledgeBase.ItemEvaluation evBot = DruidKnowledgeBase.evaluateItemLines(botLines, profile);
@@ -228,6 +256,7 @@ public class ScreenAnalyzer {
 
         DruidKnowledgeBase.ItemEvaluation equipped = useHorizontal ? evLeft : evTop;
         DruidKnowledgeBase.ItemEvaluation candidate = useHorizontal ? evRight : evBot;
+        List<IdleArcOcrEngine.OcrLine> candMeta = useHorizontal ? rightMeta : botMeta;
         List<String> candLines = useHorizontal ? rightLines : botLines;
         List<String> eqLines = useHorizontal ? leftLines : topLines;
         SlotAffixAdvisor.GearSlot candSlot = SlotAffixAdvisor.detectSlotFromLines(candLines);
@@ -249,16 +278,28 @@ public class ScreenAnalyzer {
         } else {
             res.color = VerdictColor.WARN;
             res.shortBadge = "⚖️ ПОЧТИ РАВНЫ";
-            res.headline = "⚖️ Предметы близки по силе — смотри бонус добычи и тир";
+            res.headline = "⚖️ Предметы близки по силе — смотри по-строчный разбор ниже";
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n", eqLabel, equipped.totalScore, equipped.tierGrade));
         sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n\n", candLabel, candidate.totalScore, candidate.tierGrade));
-        sb.append("Разбор нового предмета:\n").append(formatItemEvalDetails(candidate, profile));
-        sb.append("\n").append(SlotAffixAdvisor.buildScannedItemSlotAdvice(candSlot, candLines, profile));
+
+        AffixPositionOptimizer.OptimizationReport candOpt =
+                AffixPositionOptimizer.analyzeItemAffixes(candMeta, candSlot, profile);
+        if (candOpt != null) {
+            sb.append(candOpt.details);
+        } else {
+            sb.append(formatItemEvalDetails(candidate, profile));
+        }
         res.details = sb.toString();
         return res;
+    }
+
+    private static List<String> toPlain(List<IdleArcOcrEngine.OcrLine> meta) {
+        List<String> out = new ArrayList<>(meta.size());
+        for (IdleArcOcrEngine.OcrLine l : meta) out.add(l.text);
+        return out;
     }
 
     private static ScanResult analyzeInscriptionChoices(IdleArcOcrEngine ocr, int[] argb, int w, int h,

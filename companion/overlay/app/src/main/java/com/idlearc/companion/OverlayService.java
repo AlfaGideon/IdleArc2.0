@@ -363,6 +363,9 @@ public class OverlayService extends Service {
             b.setOnClickListener(v -> {
                 profile.mode = bm;
                 profile.save(OverlayService.this);
+                if (lastScanResult != null && lastScanResult.isAffixItemScan) {
+                    ScreenAnalyzer.recomputeAffixScan(lastScanResult, lastScanResult.detectedSlot, profile);
+                }
                 refreshUiContent();
             });
             modeButtons[i] = b;
@@ -409,6 +412,10 @@ public class OverlayService extends Service {
             sb.setLayoutParams(slp);
             sb.setOnClickListener(v -> {
                 selectedSlot = gs;
+                if (activeTab == 0 && lastScanResult != null && lastScanResult.isAffixItemScan
+                        && gs != SlotAffixAdvisor.GearSlot.TALISMAN && gs != SlotAffixAdvisor.GearSlot.PET) {
+                    ScreenAnalyzer.recomputeAffixScan(lastScanResult, gs, profile);
+                }
                 refreshUiContent();
             });
             slotButtons[i] = sb;
@@ -635,7 +642,9 @@ public class OverlayService extends Service {
         }
 
         if (slotPickerScroll != null) {
-            slotPickerScroll.setVisibility(activeTab == 1 ? View.VISIBLE : View.GONE);
+            boolean showSlots = (activeTab == 1)
+                    || (activeTab == 0 && lastScanResult != null && lastScanResult.isAffixItemScan);
+            slotPickerScroll.setVisibility(showSlots ? View.VISIBLE : View.GONE);
             SlotAffixAdvisor.GearSlot[] allSlots = SlotAffixAdvisor.GearSlot.values();
             for (int i = 0; i < allSlots.length; i++) {
                 boolean sel = (selectedSlot == allSlots[i]);

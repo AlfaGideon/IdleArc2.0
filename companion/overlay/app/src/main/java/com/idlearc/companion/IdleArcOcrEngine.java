@@ -69,9 +69,48 @@ public class IdleArcOcrEngine {
     }
 
     /**
+     * Строка текста с экранными координатами и цветовыми признаками усиления Пробуждения
+     * (в IdleArc усиленные Пробуждением позиции аффиксов рисуются голубым/бирюзовым цветом
+     * со значком римской цифры I, II, III, IV, V... = +10%, +20%, +30%... либо фиолетовым акцентом Кузницы).
+     */
+    public static final class OcrLine {
+        public final String text;
+        public final int y0;
+        public final int y1;
+        public final float cyanRatio;
+        public final float purpleRatio;
+        public final int badgeStrokes;
+
+        public OcrLine(String text, int y0, int y1, float cyanRatio, float purpleRatio, int badgeStrokes) {
+            this.text = text;
+            this.y0 = y0;
+            this.y1 = y1;
+            this.cyanRatio = cyanRatio;
+            this.purpleRatio = purpleRatio;
+            this.badgeStrokes = badgeStrokes;
+        }
+
+        public boolean hasAwakenHighlight() {
+            return cyanRatio >= 0.16f || purpleRatio >= 0.18f;
+        }
+    }
+
+    /**
      * Распознаёт строки текста внутри прямоугольника [rx0..rx1) x [ry0..ry1) кадра ARGB_8888.
      */
     public List<String> recognizeRegion(int[] argb, int imgW, int imgH, int rx0, int ry0, int rx1, int ry1) {
+        List<OcrLine> meta = recognizeLinesWithMeta(argb, imgW, imgH, rx0, ry0, rx1, ry1);
+        List<String> out = new ArrayList<>(meta.size());
+        for (OcrLine l : meta) {
+            out.add(l.text);
+        }
+        return out;
+    }
+
+    /**
+     * Распознаёт строки текста вместе с координатами Y и детекцией голубых/фиолетовых позиций Пробуждения.
+     */
+    public List<OcrLine> recognizeLinesWithMeta(int[] argb, int imgW, int imgH, int rx0, int ry0, int rx1, int ry1) {
         rx0 = Math.max(0, Math.min(imgW - 1, rx0));
         ry0 = Math.max(0, Math.min(imgH - 1, ry0));
         rx1 = Math.max(rx0 + 1, Math.min(imgW, rx1));
@@ -185,13 +224,40 @@ public class IdleArcOcrEngine {
         }
 
         // 4. Сегментация символов внутри каждой строки и классификация по шаблонам Roboto
-        List<String> resultLines = new ArrayList<>();
+        List<OcrLine> resultLines = new ArrayList<>();
         float[] patchBuf = new float[gw * gh];
 
         for (int[] band : lineBands) {
             int ly0 = band[0];
             int ly1 = band[1];
             int lh = ly1 - ly0;
+
+            // Измеряем цветовой профиль активных пикселей строки (голубой значок/текст Пробуждения I..V или фиолетовый акцент)
+            int fgPixels = 0;
+            int cyanPixels = 0;
+            int purplePixels = 0;
+            for (int y = ly0; y < ly1; y++) {
+                int imgRow = (ry0 + y) * imgW + rx0;
+                float[] dRow = diff[y];
+                for (int x = 0; x < rw; x++) {
+                    if (dRow[x] > 0.36f) {
+                        fgPixels++;
+                        int px = argb[imgRow + x];
+                        int r = (px >> 16) & 0xFF;
+                        int g = (px >> 8) & 0xFF;
+                        int b = px & 0xFF;
+                        // Голубой/бирюзовый цвет усиленного аффикса (cyan: высокий G и B, низкий R)
+                        if (b >= 165 && g >= 135 && (b - r) >= 50 && (g - r) >= 35 && (g - b) <= 35) {
+                            cyanPixels++;
+                        } else if (b >= 165 && r >= 120 && (b - g) >= 40 && (r - g) >= 20) {
+                            purplePixels++;
+                        }
+                    }
+                }
+            }
+            float cyanRatio = fgPixels > 0 ? (cyanPixels / (float) fgPixels) : 0f;
+            float purpleRatio = fgPixels > 0 ? (purplePixels / (float) fgPixels) : 0f;
+            int detectedBadgeStrokes = 0;
 
             List<int[]> spans = new ArrayList<>();
             boolean inChar = false;
@@ -228,8 +294,26 @@ public class IdleArcOcrEngine {
                     }
                 }
 
-                // Пропускаем широкие круглые иконки (значки вопроса, иконки валют)
+                // Широкий блок в начале/конце голубой строки может быть плашкой римской цифры [I]..[V]
                 if ((x1 - x0) > lh * 1.38f) {
+                    if ((i == 0 || i == spans.size() - 1) && (cyanRatio >= 0.12f || purpleRatio >= 0.14f)
+                            && (x1 - x0) <= lh * 2.8f) {
+                        int midY = ly0 + lh / 2;
+                        int peaks = 0;
+                        boolean inPeak = false;
+                        for (int bx = x0 + 3; bx < x1 - 3; bx++) {
+                            boolean on = diff[midY][bx] > 0.38f;
+                            if (on && !inPeak) {
+                                peaks++;
+                                inPeak = true;
+                            } else if (!on) {
+                                inPeak = false;
+                            }
+                        }
+                        if (peaks >= 1 && peaks <= 6) {
+                            detectedBadgeStrokes = Math.max(detectedBadgeStrokes, peaks);
+                        }
+                    }
                     i++;
                     continue;
                 }
@@ -280,7 +364,8 @@ public class IdleArcOcrEngine {
 
             String line = postProcessLine(sb.toString().trim());
             if (!line.isEmpty()) {
-                resultLines.add(line);
+                resultLines.add(new OcrLine(
+                        line, ry0 + ly0, ry0 + ly1, cyanRatio, purpleRatio, detectedBadgeStrokes));
             }
         }
 

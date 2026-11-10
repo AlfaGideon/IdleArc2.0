@@ -341,11 +341,7 @@ public class SlotAffixAdvisor {
         }
 
         sb.append("\n🔄 БОНУС ДОБЫЧИ (СМЕНА ТИПА / ТРАНСМУТАЦИЯ):\n  ")
-          .append(slot.dropBonusAdvice).append("\n");
-
-        if (slot != GearSlot.TALISMAN && slot != GearSlot.PET) {
-            sb.append("\n💠 САМОЦВЕТЫ В ГНЁЗДА: ").append(slot.gemAdvice);
-        }
+          .append(slot.dropBonusAdvice);
         return sb.toString();
     }
 
