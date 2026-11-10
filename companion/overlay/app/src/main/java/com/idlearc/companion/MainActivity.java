@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -64,14 +65,14 @@ public class MainActivity extends Activity {
 
         // Заголовок
         TextView headerTitle = new TextView(this);
-        headerTitle.setText("🌿 IdleArc Druid Helper");
+        headerTitle.setText("🌿 IdleArc Druid Helper v1.1");
         headerTitle.setTextColor(0xFF34D399);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         root.addView(headerTitle);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Плавающий виджет-советник поверх игры · Офлайн OCR RU/EN · Без сети и автокликов");
+        subtitle.setText("Плавающий сканер + Подбор аффиксов и ★ Перерождения под каждый слот · Офлайн OCR RU/EN");
         subtitle.setTextColor(0xFF9CA3AF);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         subtitle.setPadding(0, dp(4), 0, dp(14));
@@ -125,6 +126,74 @@ public class MainActivity extends Activity {
         launchCard.addView(howToTv);
 
         root.addView(launchCard);
+
+        // Интерактивная карточка: Подбор аффиксов и ★ Перерождения/Пробуждения под каждый вид предмета (11 слотов)
+        LinearLayout slotCard = makeCard(0xFF1A162B, 0xFFC084FC);
+        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        scLp.topMargin = dp(14);
+        slotCard.setLayoutParams(scLp);
+
+        TextView slotCardTitle = new TextView(this);
+        slotCardTitle.setText("🛠️ Аффиксы и ★ Перерождение под каждый слот");
+        slotCardTitle.setTextColor(0xFFE9D5FF);
+        slotCardTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        slotCardTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
+        slotCard.addView(slotCardTitle);
+
+        TextView slotCardSub = new TextView(this);
+        slotCardSub.setText("Нажми на нужный вид предмета (доступно и прямо в плавающем виджете на вкладке «Слоты & ★»):");
+        slotCardSub.setTextColor(0xFF9CA3AF);
+        slotCardSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        slotCardSub.setPadding(0, dp(3), 0, dp(8));
+        slotCard.addView(slotCardSub);
+
+        HorizontalScrollView mainSlotScroll = new HorizontalScrollView(this);
+        mainSlotScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout mainSlotRow = new LinearLayout(this);
+        mainSlotRow.setOrientation(LinearLayout.HORIZONTAL);
+        mainSlotRow.setPadding(0, 0, 0, dp(10));
+
+        final TextView slotDetailTv = new TextView(this);
+        slotDetailTv.setTextColor(0xFFF3F4F6);
+        slotDetailTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
+        slotDetailTv.setLineSpacing(dp(2), 1.08f);
+
+        final SlotAffixAdvisor.GearSlot[] allGearSlots = SlotAffixAdvisor.GearSlot.values();
+        final TextView[] mainSlotChips = new TextView[allGearSlots.length];
+        for (int i = 0; i < allGearSlots.length; i++) {
+            final int idx = i;
+            final SlotAffixAdvisor.GearSlot gs = allGearSlots[i];
+            TextView chip = new TextView(this);
+            chip.setText(gs.shortChip);
+            chip.setTypeface(Typeface.DEFAULT_BOLD);
+            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            chip.setPadding(dp(10), dp(7), dp(10), dp(7));
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) clp.leftMargin = dp(6);
+            chip.setLayoutParams(clp);
+            chip.setOnClickListener(v -> {
+                for (int j = 0; j < allGearSlots.length; j++) {
+                    boolean sel = (j == idx);
+                    GradientDrawable gd = new GradientDrawable();
+                    gd.setColor(sel ? 0xFF5B21B6 : 0xFF252236);
+                    gd.setCornerRadius(dp(10));
+                    gd.setStroke(dp(1), sel ? 0xFFC4B5FD : 0xFF3F3B54);
+                    mainSlotChips[j].setBackground(gd);
+                    mainSlotChips[j].setTextColor(sel ? 0xFFFFFFFF : 0xFFD1D5DB);
+                }
+                slotDetailTv.setText(SlotAffixAdvisor.formatSlotGuide(gs, profile));
+            });
+            mainSlotChips[i] = chip;
+            mainSlotRow.addView(chip);
+        }
+        mainSlotScroll.addView(mainSlotRow);
+        slotCard.addView(mainSlotScroll);
+        slotCard.addView(slotDetailTv);
+        // Инициализируем первый слот (Оружие)
+        mainSlotChips[0].performClick();
+        root.addView(slotCard);
 
         // Карточка аудита текущего билда [UND] AlfaGideon
         LinearLayout auditCard = makeCard(0xFF181625, 0xFFFBBF24);

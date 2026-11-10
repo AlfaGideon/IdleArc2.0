@@ -68,11 +68,14 @@ public class OverlayService extends Service {
     private TextView cardBodyTv;
     private TextView autoToggleBtn;
     private final TextView[] modeButtons = new TextView[4];
-    private final TextView[] tabButtons = new TextView[4];
+    private final TextView[] tabButtons = new TextView[5];
+    private HorizontalScrollView slotPickerScroll;
+    private final TextView[] slotButtons = new TextView[SlotAffixAdvisor.GearSlot.values().length];
+    private SlotAffixAdvisor.GearSlot selectedSlot = SlotAffixAdvisor.GearSlot.WEAPON;
 
     private boolean isExpanded = false;
     private boolean autoScanEnabled = false;
-    private int activeTab = 0; // 0=Скан, 1=Аудит статов, 2=Надписи/Петы, 3=Гайд 1->Кап
+    private int activeTab = 0; // 0=Скан, 1=Слоты и ★, 2=Аудит статов, 3=Надписи/Петы, 4=Гайд 1->Кап
     private boolean scanInProgress = false;
     private long lastFrameSignature = 0L;
 
@@ -369,15 +372,16 @@ public class OverlayService extends Service {
         expandedCard.addView(modeScroll);
 
         // Переключатель вкладок внутри оверлея
-        String[] tabNames = {"🎯 Скан", "📊 Статы", "✒️ Надписи/Петы", "🗺️ 1→Кап"};
+        String[] tabNames = {"🎯 Скан", "🛠️ Слоты & ★", "📊 Статы", "✒️ Надписи", "🗺️ 1→Кап"};
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
         tabRow.setPadding(0, dp(2), 0, dp(6));
         for (int i = 0; i < tabNames.length; i++) {
             final int tabIdx = i;
-            TextView tb = makeButton(tabNames[i], 0xFF201D2E, 0xFF9CA3AF, 11f);
+            TextView tb = makeButton(tabNames[i], 0xFF201D2E, 0xFF9CA3AF, 10.5f);
+            tb.setPadding(dp(4), dp(5), dp(4), dp(5));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) lp.leftMargin = dp(4);
+            if (i > 0) lp.leftMargin = dp(3);
             tb.setGravity(Gravity.CENTER);
             tb.setLayoutParams(lp);
             tb.setOnClickListener(v -> {
@@ -388,6 +392,31 @@ public class OverlayService extends Service {
             tabRow.addView(tb);
         }
         expandedCard.addView(tabRow);
+
+        // Полоса выбора конкретного вида предмета (11 слотов) — видна на вкладке «🛠️ Слоты & ★»
+        slotPickerScroll = new HorizontalScrollView(this);
+        slotPickerScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout slotRow = new LinearLayout(this);
+        slotRow.setOrientation(LinearLayout.HORIZONTAL);
+        slotRow.setPadding(0, 0, 0, dp(6));
+        SlotAffixAdvisor.GearSlot[] allSlots = SlotAffixAdvisor.GearSlot.values();
+        for (int i = 0; i < allSlots.length; i++) {
+            final SlotAffixAdvisor.GearSlot gs = allSlots[i];
+            TextView sb = makeButton(gs.shortChip, 0xFF252236, 0xFFD1D5DB, 11f);
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) slp.leftMargin = dp(5);
+            sb.setLayoutParams(slp);
+            sb.setOnClickListener(v -> {
+                selectedSlot = gs;
+                refreshUiContent();
+            });
+            slotButtons[i] = sb;
+            slotRow.addView(sb);
+        }
+        slotPickerScroll.addView(slotRow);
+        slotPickerScroll.setVisibility(View.GONE);
+        expandedCard.addView(slotPickerScroll);
 
         // Плашка вердикта
         cardSubTypeTv = new TextView(this);
@@ -550,6 +579,9 @@ public class OverlayService extends Service {
 
             mainHandler.post(() -> {
                 lastScanResult = result;
+                if (result.detectedSlot != null) {
+                    selectedSlot = result.detectedSlot;
+                }
                 scanInProgress = false;
                 if (!silentAuto) {
                     activeTab = 0;
@@ -602,6 +634,17 @@ public class OverlayService extends Service {
             tabButtons[i].setTextColor(sel ? 0xFFFFFFFF : 0xFF9CA3AF);
         }
 
+        if (slotPickerScroll != null) {
+            slotPickerScroll.setVisibility(activeTab == 1 ? View.VISIBLE : View.GONE);
+            SlotAffixAdvisor.GearSlot[] allSlots = SlotAffixAdvisor.GearSlot.values();
+            for (int i = 0; i < allSlots.length; i++) {
+                boolean sel = (selectedSlot == allSlots[i]);
+                slotButtons[i].setBackground(roundRect(sel ? 0xFF5B21B6 : 0xFF252236,
+                        sel ? 0xFFC4B5FD : 0xFF3F3B54, dp(1), dp(10)));
+                slotButtons[i].setTextColor(sel ? 0xFFFFFFFF : 0xFFD1D5DB);
+            }
+        }
+
         if (lastScanResult != null) {
             pillStatusTv.setText(lastScanResult.shortBadge);
         } else {
@@ -621,17 +664,22 @@ public class OverlayService extends Service {
             } else {
                 cardSubTypeTv.setText("Режим: " + profile.mode.title + " — " + profile.mode.subtitle);
                 cardHeadlineTv.setText(mediaProjection != null
-                        ? "🔍 Открой в IdleArc предмет/навык/статы и жми СКАН"
+                        ? "🔍 Открой предмет/кузницу/навык и жми СКАН (или вкладку «Слоты & ★»)"
                         : "⚠️ Режим шпаргалки (для OCR включи Захват экрана)");
                 cardHeadlineTv.setBackground(roundRect(0xFF1F2937, 0xFF34D399, dp(1), dp(10)));
                 cardBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
             }
         } else if (activeTab == 1) {
+            cardSubTypeTv.setText("Выбери слот выше · Режим: " + profile.mode.title + " (разные пулы аффиксов!)");
+            cardHeadlineTv.setText("🛠️ " + selectedSlot.shortChip + " — " + selectedSlot.awakenHeadline);
+            cardHeadlineTv.setBackground(roundRect(0xFF3B1F5E, 0xFFC084FC, dp(1), dp(10)));
+            cardBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(selectedSlot, profile));
+        } else if (activeTab == 2) {
             cardSubTypeTv.setText("Живой профиль Друида (обновляется сканом «Характеристик»)");
             cardHeadlineTv.setText("📊 Персональный разбор статов и капов");
             cardHeadlineTv.setBackground(roundRect(0xFF064E3B, 0xFF34D399, dp(1), dp(10)));
             cardBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
-        } else if (activeTab == 2) {
+        } else if (activeTab == 3) {
             cardSubTypeTv.setText("Талисманы +9 · Команда из 4 питомцев · Пресеты");
             cardHeadlineTv.setText("✒️ Приоритеты Автонадписей и Петов");
             cardHeadlineTv.setBackground(roundRect(0xFF3B2F63, 0xFFA78BFA, dp(1), dp(10)));

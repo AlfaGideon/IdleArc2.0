@@ -154,7 +154,7 @@ def build_apk() -> Path:
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        final_apk = OUT_DIR / "IdleArc-DruidHelper-v1.0.0.apk"
+        final_apk = OUT_DIR / "IdleArc-DruidHelper-v1.1.0.apk"
         subprocess.check_call([
             java, "-jar", apksigner_jar, "sign",
             "--ks", str(keystore),
@@ -164,6 +164,7 @@ def build_apk() -> Path:
             "--v1-signing-enabled", "true",
             "--v2-signing-enabled", "true",
             "--v3-signing-enabled", "true",
+            "--v4-signing-enabled", "false",
             "--out", str(final_apk),
             str(aligned_apk),
         ])

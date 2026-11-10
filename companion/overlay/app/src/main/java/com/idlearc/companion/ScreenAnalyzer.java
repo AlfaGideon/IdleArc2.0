@@ -26,6 +26,7 @@ public class ScreenAnalyzer {
         public String details = "";
         public VerdictColor color = VerdictColor.GOOD;
         public boolean profileUpdated = false;
+        public SlotAffixAdvisor.GearSlot detectedSlot = null;
         public List<String> rawLines = new ArrayList<>();
     }
 
@@ -135,22 +136,37 @@ public class ScreenAnalyzer {
             return analyzeItemComparison(ocr, argb, w, h, profile);
         }
 
-        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / ТАЛИСМАНА / ПИТОМЦА / РУНЫ
-        if (isSingleItemPopup(lowAll)) {
+        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / КУЗНИЦЫ / ПРОБУЖДЕНИЯ (★) / ТАЛИСМАНА / ПИТОМЦА
+        boolean equipGridNoModal = (lowAll.contains("кодекс") && lowAll.contains("автонадписи"))
+                && !lowAll.contains("надеть") && !lowAll.contains("разобрать") && !lowAll.contains("перераспредел");
+        SlotAffixAdvisor.GearSlot detectedSlot = equipGridNoModal ? null : SlotAffixAdvisor.detectSlotFromLines(lines);
+        if (!equipGridNoModal && (isSingleItemPopup(lowAll) || detectedSlot != null)) {
+            res.detectedSlot = detectedSlot;
             DruidKnowledgeBase.ItemEvaluation ev = DruidKnowledgeBase.evaluateItemLines(lines, profile);
-            res.screenType = "Оценка предмета (" + profile.mode.title + ")";
-            res.shortBadge = "🛡️ " + ev.tierGrade;
+            // На защитных слотах (Шлем, Броня, Пояс, Сапоги) нет оружейных множителей — нормируем шкалу под слот!
+            if (detectedSlot == SlotAffixAdvisor.GearSlot.HELMET
+                    || detectedSlot == SlotAffixAdvisor.GearSlot.CHEST
+                    || detectedSlot == SlotAffixAdvisor.GearSlot.BELT
+                    || detectedSlot == SlotAffixAdvisor.GearSlot.BOOTS) {
+                ev.totalScore *= 1.45;
+                recomputeGrade(ev);
+            }
+
+            String slotLabel = detectedSlot != null ? detectedSlot.shortChip : "Предмет";
+            res.screenType = slotLabel + " · Аффиксы и ★ (" + profile.mode.title + ")";
+            res.shortBadge = slotLabel + ": " + ev.tierGrade;
             if (ev.totalScore >= 52) {
                 res.color = VerdictColor.GOOD;
-                res.headline = "✅ СИЛЬНЫЙ ПРЕДМЕТ: " + ev.tierGrade + (ev.tierTagFound.isEmpty() ? "" : " [" + ev.tierTagFound + "]");
+                res.headline = "✅ " + slotLabel + " — " + ev.tierGrade + (ev.tierTagFound.isEmpty() ? "" : " [" + ev.tierTagFound + "]");
             } else if (ev.totalScore >= 25) {
                 res.color = VerdictColor.WARN;
-                res.headline = "⚖️ СРЕДНИЙ ВАРИАНТ: " + ev.tierGrade + " — смотри аффиксы";
+                res.headline = "⚖️ " + slotLabel + " — " + ev.tierGrade + " (можно докрутить)";
             } else {
                 res.color = VerdictColor.BAD;
-                res.headline = "❌ СЛАБЫЙ ПОД ДРУИДА: " + ev.tierGrade;
+                res.headline = "❌ " + slotLabel + " — " + ev.tierGrade;
             }
-            res.details = formatItemEvalDetails(ev, profile);
+            res.details = formatItemEvalDetails(ev, profile)
+                    + "\n" + SlotAffixAdvisor.buildScannedItemSlotAdvice(detectedSlot, lines, profile);
             return res;
         }
 
@@ -212,6 +228,12 @@ public class ScreenAnalyzer {
 
         DruidKnowledgeBase.ItemEvaluation equipped = useHorizontal ? evLeft : evTop;
         DruidKnowledgeBase.ItemEvaluation candidate = useHorizontal ? evRight : evBot;
+        List<String> candLines = useHorizontal ? rightLines : botLines;
+        List<String> eqLines = useHorizontal ? leftLines : topLines;
+        SlotAffixAdvisor.GearSlot candSlot = SlotAffixAdvisor.detectSlotFromLines(candLines);
+        if (candSlot == null) candSlot = SlotAffixAdvisor.detectSlotFromLines(eqLines);
+        res.detectedSlot = candSlot;
+
         String eqLabel = useHorizontal ? "Левый (текущий)" : "Верхний (текущий)";
         String candLabel = useHorizontal ? "Правый (новый)" : "Нижний (новый)";
 
@@ -234,6 +256,7 @@ public class ScreenAnalyzer {
         sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n", eqLabel, equipped.totalScore, equipped.tierGrade));
         sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n\n", candLabel, candidate.totalScore, candidate.tierGrade));
         sb.append("Разбор нового предмета:\n").append(formatItemEvalDetails(candidate, profile));
+        sb.append("\n").append(SlotAffixAdvisor.buildScannedItemSlotAdvice(candSlot, candLines, profile));
         res.details = sb.toString();
         return res;
     }
@@ -294,9 +317,18 @@ public class ScreenAnalyzer {
         return equipWords >= 2 || (low.contains("надеть") && low.contains("продать")) || (low.contains("надеть") && low.contains("разобрать"));
     }
 
+    private static void recomputeGrade(DruidKnowledgeBase.ItemEvaluation ev) {
+        if (ev.totalScore >= 85) ev.tierGrade = "S+ (ИДЕАЛ)";
+        else if (ev.totalScore >= 52) ev.tierGrade = "S / A (ОТЛИЧНО)";
+        else if (ev.totalScore >= 25) ev.tierGrade = "B (СРЕДНЕ)";
+        else if (ev.totalScore >= 5) ev.tierGrade = "C (ПРОХОДНОЙ)";
+        else ev.tierGrade = "D (В РАЗБОР)";
+    }
+
     private static boolean isSingleItemPopup(String low) {
         return low.contains("надеть") || low.contains("переков") || low.contains("трансмутац")
-                || low.contains("пробужд") || low.contains("талисман") || low.contains("аффикс")
+                || low.contains("пробужд") || low.contains("перераспредел") || low.contains("смена типа")
+                || low.contains("позиции аффиксов") || low.contains("талисман") || low.contains("аффикс")
                 || low.contains("очки снаряжения") || low.contains("урон питомц")
                 || low.contains("двойного удара") || low.contains("все классовые навыки");
     }
