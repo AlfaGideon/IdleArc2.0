@@ -215,7 +215,10 @@ public class AffixPositionOptimizer {
 
         boolean slotInferred = false;
         if (detectedSlot == null) {
-            detectedSlot = inferSlotFromObservedAffixes(rows);
+            List<String> modalPlain = new ArrayList<>(modalLines.size());
+            for (IdleArcOcrEngine.OcrLine ml : modalLines) modalPlain.add(ml.text);
+            boolean hasArmorBaseDef = SlotAffixAdvisor.hasArmorBaseDefenseAboveAffixes(modalPlain);
+            detectedSlot = inferSlotFromObservedAffixes(rows, hasArmorBaseDef);
             slotInferred = true;
         }
 
@@ -245,7 +248,7 @@ public class AffixPositionOptimizer {
         // 2. Формируем по-строчный вердикт ТОЛЬКО по текущим аффиксам #1..#N (макс. 5/5) и их реальной разнице
         StringBuilder out = new StringBuilder();
         String slotHeader = slotInferred
-                ? ("Предмет (шапка вне кадра — при необходимости выбери слот выше; авто-пул " + detectedSlot.shortChip + ")")
+                ? "Предмет (шапка скрыта — выбери слот кнопкой выше)"
                 : (detectedSlot.shortChip + " (" + detectedSlot.slotTitle + ")");
 
         List<String> awakenedSummary = new ArrayList<>();
@@ -362,7 +365,8 @@ public class AffixPositionOptimizer {
 
         if (replaceCount == 0) {
             color = ScreenAnalyzer.VerdictColor.GOOD;
-            shortBadge = "✅ " + detectedSlot.shortChip + ": все " + n + "/" + n + " на месте!";
+            String badgePrefix = slotInferred ? "📦 Предмет" : detectedSlot.shortChip;
+            shortBadge = "✅ " + badgePrefix + ": все " + n + "/" + n + " на месте!";
             headline = "✅ Идеальная раскладка: все " + n + " аффиксов стоят на своих лучших местах!";
         } else if (netGain >= 8.0 || replaceCount >= 2) {
             color = ScreenAnalyzer.VerdictColor.WARN;
@@ -738,7 +742,19 @@ public class AffixPositionOptimizer {
         return (n >= 1 && n < r.length) ? r[n] : ("×" + n);
     }
 
-    private static SlotAffixAdvisor.GearSlot inferSlotFromObservedAffixes(List<ParsedAffixRow> rows) {
+    private static SlotAffixAdvisor.GearSlot inferSlotFromObservedAffixes(
+            List<ParsedAffixRow> rows, boolean hasArmorBaseDef) {
+        if (hasArmorBaseDef) {
+            // Базовая Защита бывает ТОЛЬКО на броне (Шлем/Броня/Перчатки/Пояс/Сапоги) — НИКОГДА на Кольце/Амулете/Оружии/Факеле!
+            for (ParsedAffixRow r : rows) {
+                if (r.type == AffixType.PET_DAMAGE || r.type == AffixType.DOUBLE_HIT
+                        || r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.CRIT_CHANCE
+                        || r.type == AffixType.CRIT_DAMAGE) {
+                    return SlotAffixAdvisor.GearSlot.GLOVES;
+                }
+            }
+            return SlotAffixAdvisor.GearSlot.CHEST;
+        }
         for (ParsedAffixRow r : rows) {
             if (r.type == AffixType.BLOODTHIRST) return SlotAffixAdvisor.GearSlot.TORCH;
             if (r.type == AffixType.ADDED_DAMAGE || r.type == AffixType.ELEMENTAL_CONVERT) {
@@ -746,13 +762,13 @@ public class AffixPositionOptimizer {
             }
         }
         for (ParsedAffixRow r : rows) {
-            if (r.type == AffixType.PET_DAMAGE || r.type == AffixType.DOUBLE_HIT
-                    || r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.CRIT_CHANCE
-                    || r.type == AffixType.CRIT_DAMAGE) {
-                return SlotAffixAdvisor.GearSlot.RING; // атакующий ювелирный/оружейный пул
+            if (r.type == AffixType.DAMAGE_REDUCTION || r.type == AffixType.DODGE_CHANCE
+                    || r.type == AffixType.FLAT_DEFENSE || r.type == AffixType.DEFENSE_PERCENT
+                    || r.type == AffixType.MAX_HEALTH) {
+                return SlotAffixAdvisor.GearSlot.CHEST;
             }
         }
-        return SlotAffixAdvisor.GearSlot.CHEST; // защитно-статовый пул брони/пояса/сапог/шлема
+        return SlotAffixAdvisor.GearSlot.WEAPON;
     }
 
     // =========================================================================

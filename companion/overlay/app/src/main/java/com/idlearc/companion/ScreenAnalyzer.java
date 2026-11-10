@@ -161,13 +161,27 @@ public class ScreenAnalyzer {
                 ? null
                 : SlotAffixAdvisor.detectSlotFromModalLines(metaLines);
 
+        // Запасной прицельный проход OCR строго по текстовой колонке шапки СПРАВА от крупной иконки предмета
+        // (x = 32%..84% ширины экрана, где нет ни левой квадратной иконки DetailPopupHeader, ни правых кнопок [Скин]/[Замок]/[X]!)
+        if (detectedSlot == null && !equipGridNoModal && (hasOpenItemCardMarkers || isSingleItemPopup(lowAll))) {
+            int hdrBottomY = (int) (h * 0.55);
+            int affIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
+            if (affIdx >= 0 && affIdx < metaLines.size()) {
+                hdrBottomY = Math.max((int) (h * 0.22), metaLines.get(affIdx).y0);
+            }
+            List<IdleArcOcrEngine.OcrLine> hdrRightCol = ocr.recognizeLinesWithMeta(
+                    argb, w, h, (int) (w * 0.32), (int) (h * 0.08), (int) (w * 0.84), hdrBottomY);
+            detectedSlot = SlotAffixAdvisor.detectSlotFromModalLines(hdrRightCol);
+        }
+
         if (!equipGridNoModal) {
             AffixPositionOptimizer.OptimizationReport opt =
                     AffixPositionOptimizer.analyzeItemAffixes(metaLines, detectedSlot, profile);
             if (opt != null && (isSingleItemPopup(lowAll) || detectedSlot != null || opt.currentRows.size() >= 2)) {
                 res.isAffixItemScan = true;
-                res.detectedSlot = opt.slot;
-                res.screenType = opt.slot.shortChip + " · По-позиционный подбор (" + profile.mode.title + ")";
+                res.detectedSlot = opt.slotInferredFromAffixes ? null : opt.slot;
+                String titleChip = opt.slotInferredFromAffixes ? "📦 Предмет (выбери слот выше)" : opt.slot.shortChip;
+                res.screenType = titleChip + " · По-позиционный подбор (" + profile.mode.title + ")";
                 res.shortBadge = opt.shortBadge;
                 res.headline = opt.headline;
                 res.color = opt.verdictColor;
@@ -265,10 +279,9 @@ public class ScreenAnalyzer {
         DruidKnowledgeBase.ItemEvaluation equipped = useHorizontal ? evLeft : evTop;
         DruidKnowledgeBase.ItemEvaluation candidate = useHorizontal ? evRight : evBot;
         List<IdleArcOcrEngine.OcrLine> candMeta = useHorizontal ? rightMeta : botMeta;
-        List<String> candLines = useHorizontal ? rightLines : botLines;
-        List<String> eqLines = useHorizontal ? leftLines : topLines;
-        SlotAffixAdvisor.GearSlot candSlot = SlotAffixAdvisor.detectSlotFromLines(candLines);
-        if (candSlot == null) candSlot = SlotAffixAdvisor.detectSlotFromLines(eqLines);
+        List<IdleArcOcrEngine.OcrLine> eqMeta = useHorizontal ? leftMeta : topMeta;
+        SlotAffixAdvisor.GearSlot candSlot = SlotAffixAdvisor.detectSlotFromModalLines(candMeta);
+        if (candSlot == null) candSlot = SlotAffixAdvisor.detectSlotFromModalLines(eqMeta);
         res.detectedSlot = candSlot;
 
         String eqLabel = useHorizontal ? "Левый (текущий)" : "Верхний (текущий)";

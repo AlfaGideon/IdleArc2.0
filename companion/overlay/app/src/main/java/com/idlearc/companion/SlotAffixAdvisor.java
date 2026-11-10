@@ -350,6 +350,31 @@ public class SlotAffixAdvisor {
             if (fromTop != null) return fromTop;
         }
 
+        // Уникальные сигнатуры врождённых статов НАД секцией «АФФИКСЫ» (на случай если заголовок прокручен):
+        if (affixHdrIdx > 0) {
+            boolean hasBaseAtk = false;
+            boolean hasBaseDef = false;
+            boolean hasAllSkillsImp = false;
+            boolean hasDhImplicit = false;
+            boolean hasBlockImplicit = false;
+            for (int i = 0; i < affixHdrIdx; i++) {
+                String raw = lines.get(i).trim();
+                String low = DruidKnowledgeBase.normalizeForMatch(raw);
+                if (low.contains("все классовые навыки")) hasAllSkillsImp = true;
+                if (low.contains("базовый урон") || (low.startsWith("урон атаки") && !raw.startsWith("+"))) {
+                    hasBaseAtk = true;
+                }
+                if (low.startsWith("защита") && !raw.contains("%") && !raw.startsWith("+")) {
+                    hasBaseDef = true;
+                }
+                if (low.contains("двойного удара")) hasDhImplicit = true;
+                if (low.contains("шанс блока")) hasBlockImplicit = true;
+            }
+            if (hasAllSkillsImp) return GearSlot.TORCH;
+            if (hasBaseAtk) return GearSlot.WEAPON;
+            if (hasBaseDef && (hasDhImplicit || hasBlockImplicit)) return GearSlot.BOOTS;
+        }
+
         // Уникальный вторичный аффикс Факела («Жажда крови») существует ТОЛЬКО на Факеле
         if (all.contains("жажда крови") || all.contains("жажды крови")) {
             return GearSlot.TORCH;
@@ -358,15 +383,30 @@ public class SlotAffixAdvisor {
         return null;
     }
 
+    /** Проверяет, есть ли над заголовком «АФФИКСЫ» базовая Защита брони (исключает Кольцо/Амулет/Оружие/Факел!). */
+    public static boolean hasArmorBaseDefenseAboveAffixes(List<String> lines) {
+        if (lines == null || lines.isEmpty()) return false;
+        int lim = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
+        if (lim <= 0) lim = Math.min(lines.size(), 6);
+        for (int i = 0; i < lim; i++) {
+            String raw = lines.get(i).trim();
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            if (low.startsWith("защита") && !raw.contains("%") && !raw.startsWith("+")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static GearSlot matchSlotCategorySubtitle(String h) {
         if (h == null || h.isEmpty()) return null;
         if (hasWord(h, "факел") || h.contains("вторая рука") || h.contains("второй руки") || h.contains("левая рука")) {
             return GearSlot.TORCH;
         }
         if (hasWord(h, "перчатки")) return GearSlot.GLOVES;
-        if (hasWord(h, "сапоги")) return GearSlot.BOOTS;
-        if (hasWord(h, "шлем")) return GearSlot.HELMET;
-        if (hasWord(h, "броня") || hasWord(h, "нагрудник")) return GearSlot.CHEST;
+        if (hasWord(h, "сапоги") || hasWord(h, "обувь")) return GearSlot.BOOTS;
+        if (hasWord(h, "шлем") || h.contains("скин шлема")) return GearSlot.HELMET;
+        if (hasWord(h, "броня") || hasWord(h, "нагрудник") || h.contains("скин брони")) return GearSlot.CHEST;
         if (hasWord(h, "пояс")) return GearSlot.BELT;
         if (hasWord(h, "амулет")) return GearSlot.AMULET;
         if (hasWord(h, "кольцо")) return GearSlot.RING;
@@ -378,17 +418,18 @@ public class SlotAffixAdvisor {
         if (h == null || h.isEmpty()) return null;
         // 1. Вторая рука / Факел (проверяем до оружия)
         if (hasStem(h, "факел") || h.contains("вторая рука") || h.contains("второй руки")
-                || h.contains("левая рука") || h.contains("книга заклинаний")
+                || h.contains("левая рука") || h.contains("книга заклинаний") || h.contains("старая книга")
                 || hasStem(h, "гримуар") || hasStem(h, "фолиант") || hasStem(h, "колчан")
-                || hasWord(h, "щит") || hasWord(h, "щита")) {
+                || hasStem(h, "баклер") || hasWord(h, "щит") || hasWord(h, "щита")) {
             return GearSlot.TORCH;
         }
-        // 2. Оружие (включая «Палка дикого сердца», «Палка древней рощи», «Рунная палка», «Когти Ночной Короны» — до «корона»!)
+        // 2. Оружие (включая «Палка дикого сердца», «Палка древней рощи», «Рунная палка», «Когти Ночной Короны», Хэллоуинское оружие)
         if (hasStem(h, "посох") || hasWord(h, "палка") || hasWord(h, "палки") || hasStem(h, "палочк")
                 || hasStem(h, "жезл") || hasStem(h, "скипетр") || hasStem(h, "когти") || hasStem(h, "когтей")
                 || hasStem(h, "клинок") || hasWord(h, "меч") || hasWord(h, "меча") || hasStem(h, "палаш")
                 || hasStem(h, "сабл") || hasStem(h, "кинжал") || hasWord(h, "лук") || hasStem(h, "арбалет")
-                || hasWord(h, "коса") || hasWord(h, "серп") || hasStem(h, "молот") || hasStem(h, "топор")
+                || hasWord(h, "коса") || hasStem(h, "серп") || hasStem(h, "жнец") || hasStem(h, "метл")
+                || hasStem(h, "мандрагор") || hasStem(h, "молот") || hasStem(h, "топор")
                 || hasStem(h, "секир") || hasStem(h, "копь") || hasStem(h, "двуручн") || hasStem(h, "одноручн")
                 || hasWord(h, "оружие")) {
             return GearSlot.WEAPON;
@@ -399,8 +440,8 @@ public class SlotAffixAdvisor {
             return GearSlot.GLOVES;
         }
         // 4. Сапоги («Сапоги Быстрого Шага», «Сандалии Старшего», «Устойчивые Сапоги», «Ботинки...»)
-        if (hasStem(h, "сапог") || hasStem(h, "ботинк") || hasStem(h, "сандал")
-                || hasStem(h, "понож") || hasStem(h, "ботфорт") || h.contains("быстрого шага")) {
+        if (hasStem(h, "сапог") || hasStem(h, "ботинк") || hasStem(h, "сандал") || hasStem(h, "обув")
+                || hasStem(h, "туфл") || hasStem(h, "понож") || hasStem(h, "ботфорт") || h.contains("быстрого шага")) {
             return GearSlot.BOOTS;
         }
         // 5. Пояс
@@ -415,16 +456,18 @@ public class SlotAffixAdvisor {
         if (hasStem(h, "кольц") || hasStem(h, "перстен") || hasStem(h, "печатк")) {
             return GearSlot.RING;
         }
-        // 8. Шлем («Корона зверя», «Капюшон из дикой шкуры», «Диадема мудреца», «Шлем...»)
+        // 8. Шлем (включая «Тыквенная голова», «Светящаяся Тыквенная голова», «Корона зверя», «Капюшон...», «Диадема...»)
         if (hasStem(h, "шлем") || hasStem(h, "капюшон") || hasWord(h, "корона") || hasWord(h, "короны")
-                || hasStem(h, "диадем") || hasStem(h, "шапк") || hasStem(h, "тиар") || hasWord(h, "маска")) {
+                || hasStem(h, "диадем") || hasStem(h, "шапк") || hasStem(h, "тиар") || hasWord(h, "маска")
+                || h.contains("тыквенная голова") || (hasStem(h, "тыквен") && hasStem(h, "голов"))) {
             return GearSlot.HELMET;
         }
-        // 9. Броня / Нагрудник (БЕЗ ложных срабатываний на «бронзовая» / «бронированный» / «дикой шкуры»!)
+        // 9. Броня / Нагрудник (включая «Светящийся Плащ пугала», «Лохмотья», БЕЗ «бронзовая» / «бронированный»!)
         if (hasWord(h, "броня") || hasWord(h, "брони") || hasStem(h, "кирас") || hasStem(h, "доспех")
                 || hasStem(h, "нагрудн") || hasStem(h, "жилет") || hasStem(h, "пластин")
-                || hasStem(h, "панцир") || hasWord(h, "пальто") || h.contains("плащ пугала")
-                || hasStem(h, "манти") || hasStem(h, "одеяни") || hasStem(h, "туник") || hasStem(h, "кольчуг")) {
+                || hasStem(h, "панцир") || hasWord(h, "пальто") || hasStem(h, "плащ") || hasStem(h, "пугал")
+                || hasStem(h, "лохмот") || hasStem(h, "манти") || hasStem(h, "одеяни")
+                || hasStem(h, "туник") || hasStem(h, "кольчуг")) {
             return GearSlot.CHEST;
         }
         return null;
