@@ -14,27 +14,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * По-позиционный оптимизатор аффиксов снаряжения Кузницы и карточек предметов (IdleArc 1.3.15).
+ * Визуальный по-позиционный анализатор предметов IdleArc 1.3.15 (0% хардкода весов или готовых замен).
  *
- * Верифицировано на 100% по серверному конфигу https://idlearc.com/api/config/game и libapp.so:
- * 1) Все 26 официальных аффиксов игры (12 Префиксов [П] + 14 Суффиксов [С]) и их точные списки
- *    совместимости applicable_to для каждого типа предмета (Оружие=18, Факел=9, Щит=8, Шлем=11,
- *    Броня=11, Перчатки=10, Сапоги=10, Пояс=13, Амулет=15, Кольцо=15).
- * 2) Двухрежимное масштабирование статов на высоких тирах (A1..A6):
- *    - статы БЕЗ аффикс-капа (Урон питомца %, Интеллект, Ловкость, Сила, Крит. урон %, Шанс крита %,
- *      Опыт %, Золото %, Здоровье, Доп. урон, Защита) растут линейно с масштабом предмета unitScale;
- *    - статы С АФФИКС-КАПОМ (Шанс двойного урона %, Шанс двойного удара %, Здоровье за удар/убийство %
- *      с плоским ростом 15%+1%×A, Снижение урона % с замороженным капом) упираются в потолок до
- *      умножения на позиционное Пробуждение [I..V].
- * 3) Официальные формулы характеристик из primary_stats (/api/config/game):
- *    - 1 Интеллект = +0.20% Шанса двойного урона (множит И героя, И питомца!) + 0.38% Атаки + 0.05% Пета;
- *    - 1 Ловкость  = +0.10% Урона питомца + 0.05% Шанса уклонения (при капе 95% уклонение сгорает);
- *    - 1 Сила      = +0.75% Физ. урона + 0.50% Макс. HP + 0.50% Возмездия;
- *    - Шанс крита свыше 100% конвертируется 1:1 в Крит. урон.
+ * Весь выбор лучшего параметра строится в реальном времени из визуального OCR-скана экрана:
+ * 1) Считывает с карточки предмета тип слота, надет ли предмет («Снять» vs «Надеть»), базовую атаку/защиту шапки,
+ *    тир пробуждения предмета (А1..А6 +заточка) и все открытые строки аффиксов с их числами и рангами [I..VIII].
+ * 2) Калибрует масштаб роллов конкретного предмета (unitScale и аффикс-кап procCapBase) напрямую из считанных чисел.
+ * 3) Вычитает текущий стат позиции #i из живого состояния героя (LiveBuildSimulator.HeroState) и прогоняет
+ *    ВСЕ допустимые аффиксы этого слота через математическую модель урона/живучести/фарма, выбирая максимум
+ *    относительного прироста (Δ% по отношению к текущему состоянию).
  */
 public class AffixPositionOptimizer {
 
-    /** Жёсткий лимит позиций вторичных аффиксов на любом предмете в IdleArc — строго 5 из 5 (5/5). */
     public static final int MAX_AFFIXES_PER_ITEM = 5;
 
     private static final Pattern NUMBER_PAT = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)");
@@ -50,6 +41,11 @@ public class AffixPositionOptimizer {
     private static final Pattern EXPLICIT_AWAKEN_PCT_PAT = Pattern.compile(
             "\\(\\s*\\+\\s*([1-9][0-9]?)\\s*%\\s*\\)|★\\s*([1-9])");
 
+    // Поддержка и латинской A, и кириллической А из OCR («Оружие . А6 +30», «Факел . А5 +5»)
+    private static final Pattern HEADER_AWAKEN_ENH = Pattern.compile(
+            "(?:^|\\s|[.·])[AА]([1-9])(?:\\s*\\+\\s*(\\d{1,3}))?(?:\\s|$)");
+    private static final Pattern HEADER_PLUS_ENH = Pattern.compile("(?:^|\\s)\\+(\\d{1,3})(?:\\s|$)");
+
     public enum AffixKind {
         PREFIX("[П]", "Префикс"),
         SUFFIX("[С]", "Суффикс"),
@@ -64,9 +60,12 @@ public class AffixPositionOptimizer {
         }
     }
 
-    /** Все официальные вторичные аффиксы снаряжения IdleArc 1.3.15 (/api/config/game) */
+    /**
+     * Таблица базовых диапазонов (base_min..base_max) всех 26 аффиксов из серверного конфига /api/config/game.
+     * Внимание: здесь НЕТ никаких весов или приоритетов — только физические диапазоны генератора предметов игры!
+     */
     public enum AffixType {
-        // === ПРЕФИКСЫ (12 в серверном конфиге: 6 обычных + 6 стихийных конверсий оружия) ===
+        // Префиксы (12 в серверном конфиге: 6 обычных + 6 стихийных конверсий оружия)
         PET_DAMAGE(AffixKind.PREFIX, "Урон питомца", true, true, 2.0, 8.0),
         DAMAGE_REDUCTION(AffixKind.PREFIX, "Снижение урона", true, false, 1.0, 3.0),
         DODGE_CHANCE(AffixKind.PREFIX, "Шанс уклонения", true, false, 0.5, 1.0),
@@ -75,7 +74,7 @@ public class AffixPositionOptimizer {
         LOCAL_FLAT_DEFENSE(AffixKind.PREFIX, "Доп. защита", false, true, 3.0, 11.0),
         ELEMENTAL_CONVERT(AffixKind.PREFIX, "Конверсия урона в стихию", true, false, 3.0, 5.0),
 
-        // === СУФФИКСЫ (14 в серверном конфиге) ===
+        // Суффиксы (14 в серверном конфиге)
         DOUBLE_DAMAGE(AffixKind.SUFFIX, "Шанс двойного урона", true, false, 1.0, 2.0),
         DOUBLE_HIT(AffixKind.SUFFIX, "Шанс двойного удара", true, false, 1.0, 2.0),
         CRIT_DAMAGE(AffixKind.SUFFIX, "Крит. урон", true, true, 1.0, 3.0),
@@ -91,7 +90,6 @@ public class AffixPositionOptimizer {
         EXP_GAIN(AffixKind.SUFFIX, "Бонус опыта", true, true, 1.0, 3.0),
         GOLD_GAIN(AffixKind.SUFFIX, "Бонус золота", true, true, 2.0, 5.0),
 
-        // Пустой слот аффикса («Пустая позиция — добавьте в Кузнице»)
         EMPTY_POSITION(AffixKind.NONE, "Пустая позиция", false, false, 0.0, 0.0);
 
         public final AffixKind kind;
@@ -118,15 +116,14 @@ public class AffixPositionOptimizer {
         }
     }
 
-    /** Распознанная позиция аффикса на предмете (#1..#5) */
     public static class ParsedAffixRow {
-        public final int index;             // 1..5 сверху вниз
+        public final int index;
         public final AffixType type;
         public final String rawLabel;
-        public final double rolledValue;    // уже с учётом пробуждения на карточке
+        public final double rolledValue;
         public final boolean valueHasPct;
-        public final int awakenTier;        // 0 = без пробуждения, 1 = [I], 2 = [II], 3 = [III]...
-        public final int awakenBonusPct;    // +10% за уровень пробуждения ([I]=10, [II]=20, [III]=30...)
+        public final int awakenTier;
+        public final int awakenBonusPct;
 
         public ParsedAffixRow(int index, AffixType type, String rawLabel, double rolledValue,
                               boolean valueHasPct, int awakenTier, int awakenBonusPct) {
@@ -144,13 +141,30 @@ public class AffixPositionOptimizer {
         }
     }
 
-    /** Калиброванная модель роллов конкретного отсканированного предмета */
+    /** Визуально считанные параметры шапки самого предмета (до секции АФФИКСЫ) */
+    public static class ScannedItemHeader {
+        public final boolean isEquipped;
+        public final double flatAttack;
+        public final double baseDefense;
+        public final int awakenLevel;
+        public final int enhancementLevel;
+
+        public ScannedItemHeader(boolean isEquipped, double flatAttack, double baseDefense,
+                                 int awakenLevel, int enhancementLevel) {
+            this.isEquipped = isEquipped;
+            this.flatAttack = flatAttack;
+            this.baseDefense = baseDefense;
+            this.awakenLevel = awakenLevel;
+            this.enhancementLevel = enhancementLevel;
+        }
+    }
+
     public static class ItemRollModel {
-        public final int itemAwakenLevel;   // A0..A6 из шапки карточки (например A5 или A6)
-        public final int enhancementLevel;  // +0..+120 из шапки карточки (например +5 или +30)
-        public final double unitScale;      // цена 1 ед. base для безкаповых аффиксов (~38 на A5+5, ~51.5 на A6+30)
-        public final double procCapBase;    // потолок базы каповых проков DD/DH до позиционного [I..V] (~43% на A5+5, ~51% на A6+30)
-        public final double bloodthirstCap; // потолок of Bloodthirst до позиционного [I..V] (15% + 1% * A)
+        public final int itemAwakenLevel;
+        public final int enhancementLevel;
+        public final double unitScale;
+        public final double procCapBase;
+        public final double bloodthirstCap;
 
         public ItemRollModel(int itemAwakenLevel, int enhancementLevel,
                              double unitScale, double procCapBase, double bloodthirstCap) {
@@ -164,24 +178,19 @@ public class AffixPositionOptimizer {
         public double expectedAvgRoll(AffixType t, double awakenMult) {
             if (t == AffixType.EMPTY_POSITION) return 0.0;
             if (t == AffixType.DOUBLE_DAMAGE || t == AffixType.DOUBLE_HIT) {
-                double rawAvg = t.baseAvg * unitScale;
-                return Math.min(rawAvg, procCapBase) * awakenMult;
+                return Math.min(t.baseAvg * unitScale, procCapBase) * awakenMult;
             }
             if (t == AffixType.BLOODTHIRST) {
-                double rawAvg = t.baseAvg * unitScale;
-                return Math.min(rawAvg, bloodthirstCap) * awakenMult;
+                return Math.min(t.baseAvg * unitScale, bloodthirstCap) * awakenMult;
             }
             if (t == AffixType.DAMAGE_REDUCTION) {
-                double rawAvg = t.baseAvg * unitScale;
-                return Math.min(rawAvg, 14.0) * awakenMult;
+                return Math.min(t.baseAvg * unitScale, 14.0) * awakenMult;
             }
             if (t == AffixType.DODGE_CHANCE) {
-                double rawAvg = t.baseAvg * unitScale;
-                return Math.min(rawAvg, 25.0) * awakenMult;
+                return Math.min(t.baseAvg * unitScale, 25.0) * awakenMult;
             }
             if (t == AffixType.ELEMENTAL_CONVERT) {
-                double rawAvg = t.baseAvg * unitScale;
-                return Math.min(rawAvg, 100.0) * awakenMult;
+                return Math.min(t.baseAvg * unitScale, 100.0) * awakenMult;
             }
             return t.baseAvg * unitScale * awakenMult;
         }
@@ -207,7 +216,6 @@ public class AffixPositionOptimizer {
         }
     }
 
-    /** Итог расчёта оптимальной раскладки аффиксов по позициям */
     public static class OptimizationReport {
         public final SlotAffixAdvisor.GearSlot slot;
         public final boolean slotInferredFromAffixes;
@@ -240,9 +248,7 @@ public class AffixPositionOptimizer {
         }
     }
 
-    /**
-     * 100% точный пул совместимых вторичных аффиксов слота из https://idlearc.com/api/config/game (`applicable_to`).
-     */
+    /** Серверная матрица допустимости аффиксов по типам предметов (/api/config/game -> applicable_to) */
     public static List<AffixType> getCompatiblePool(SlotAffixAdvisor.GearSlot slot) {
         return getCompatiblePool(slot, false);
     }
@@ -253,116 +259,71 @@ public class AffixPositionOptimizer {
         switch (slot) {
             case WEAPON:
                 Collections.addAll(p,
-                        AffixType.PET_DAMAGE,
-                        AffixType.DOUBLE_HIT,
-                        AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE,
-                        AffixType.CRIT_CHANCE,
-                        AffixType.INTELLIGENCE,
-                        AffixType.DEXTERITY,
-                        AffixType.STRENGTH,
-                        AffixType.LIFE_ON_HIT,
-                        AffixType.LIFE_ON_KILL,
-                        AffixType.EXP_GAIN,
-                        AffixType.GOLD_GAIN,
-                        AffixType.ELEMENTAL_CONVERT);
+                        AffixType.PET_DAMAGE, AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE,
+                        AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.INTELLIGENCE, AffixType.DEXTERITY, AffixType.STRENGTH,
+                        AffixType.LIFE_ON_HIT, AffixType.LIFE_ON_KILL,
+                        AffixType.EXP_GAIN, AffixType.GOLD_GAIN, AffixType.ELEMENTAL_CONVERT);
                 break;
-
             case TORCH:
                 p.add(AffixType.PET_DAMAGE);
                 p.add(AffixType.DAMAGE_REDUCTION);
                 p.add(AffixType.DODGE_CHANCE);
-                if (!isShieldBase) {
-                    p.add(AffixType.BLOODTHIRST);
-                }
+                if (!isShieldBase) p.add(AffixType.BLOODTHIRST);
                 p.add(AffixType.DOUBLE_DAMAGE);
                 p.add(AffixType.CRIT_DAMAGE);
                 p.add(AffixType.CRIT_CHANCE);
                 p.add(AffixType.EXP_GAIN);
                 p.add(AffixType.GOLD_GAIN);
                 break;
-
             case HELMET:
             case CHEST:
                 Collections.addAll(p,
-                        AffixType.PET_DAMAGE,
-                        AffixType.DAMAGE_REDUCTION,
-                        AffixType.MAX_HEALTH,
-                        AffixType.LOCAL_PERCENT_DEFENSE,
-                        AffixType.LOCAL_FLAT_DEFENSE,
-                        AffixType.DODGE_CHANCE,
-                        AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE,
-                        AffixType.CRIT_CHANCE,
-                        AffixType.EXP_GAIN,
-                        AffixType.GOLD_GAIN);
+                        AffixType.PET_DAMAGE, AffixType.DAMAGE_REDUCTION, AffixType.MAX_HEALTH,
+                        AffixType.LOCAL_PERCENT_DEFENSE, AffixType.LOCAL_FLAT_DEFENSE, AffixType.DODGE_CHANCE,
+                        AffixType.DOUBLE_DAMAGE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.EXP_GAIN, AffixType.GOLD_GAIN);
                 break;
-
             case GLOVES:
             case BOOTS:
                 Collections.addAll(p,
-                        AffixType.PET_DAMAGE,
-                        AffixType.MAX_HEALTH,
-                        AffixType.LOCAL_PERCENT_DEFENSE,
-                        AffixType.LOCAL_FLAT_DEFENSE,
-                        AffixType.DODGE_CHANCE,
-                        AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE,
-                        AffixType.CRIT_CHANCE,
-                        AffixType.EXP_GAIN,
-                        AffixType.GOLD_GAIN);
+                        AffixType.PET_DAMAGE, AffixType.MAX_HEALTH,
+                        AffixType.LOCAL_PERCENT_DEFENSE, AffixType.LOCAL_FLAT_DEFENSE, AffixType.DODGE_CHANCE,
+                        AffixType.DOUBLE_DAMAGE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.EXP_GAIN, AffixType.GOLD_GAIN);
                 break;
-
             case BELT:
                 Collections.addAll(p,
-                        AffixType.PET_DAMAGE,
-                        AffixType.MAX_HEALTH,
-                        AffixType.DOUBLE_HIT,
-                        AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE,
-                        AffixType.CRIT_CHANCE,
-                        AffixType.INTELLIGENCE,
-                        AffixType.DEXTERITY,
-                        AffixType.STRENGTH,
-                        AffixType.ADDED_DAMAGE,
-                        AffixType.DEFENSE_PERCENT,
-                        AffixType.EXP_GAIN,
-                        AffixType.GOLD_GAIN);
+                        AffixType.PET_DAMAGE, AffixType.MAX_HEALTH,
+                        AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.INTELLIGENCE, AffixType.DEXTERITY, AffixType.STRENGTH,
+                        AffixType.ADDED_DAMAGE, AffixType.DEFENSE_PERCENT,
+                        AffixType.EXP_GAIN, AffixType.GOLD_GAIN);
                 break;
-
             case AMULET:
             case RING:
             default:
                 Collections.addAll(p,
-                        AffixType.PET_DAMAGE,
-                        AffixType.MAX_HEALTH,
-                        AffixType.DOUBLE_HIT,
-                        AffixType.DOUBLE_DAMAGE,
-                        AffixType.CRIT_DAMAGE,
-                        AffixType.CRIT_CHANCE,
-                        AffixType.INTELLIGENCE,
-                        AffixType.DEXTERITY,
-                        AffixType.STRENGTH,
-                        AffixType.ADDED_DAMAGE,
-                        AffixType.DEFENSE_PERCENT,
-                        AffixType.LIFE_ON_HIT,
-                        AffixType.LIFE_ON_KILL,
-                        AffixType.EXP_GAIN,
-                        AffixType.GOLD_GAIN);
+                        AffixType.PET_DAMAGE, AffixType.MAX_HEALTH,
+                        AffixType.DOUBLE_HIT, AffixType.DOUBLE_DAMAGE, AffixType.CRIT_DAMAGE, AffixType.CRIT_CHANCE,
+                        AffixType.INTELLIGENCE, AffixType.DEXTERITY, AffixType.STRENGTH,
+                        AffixType.ADDED_DAMAGE, AffixType.DEFENSE_PERCENT,
+                        AffixType.LIFE_ON_HIT, AffixType.LIFE_ON_KILL,
+                        AffixType.EXP_GAIN, AffixType.GOLD_GAIN);
                 break;
         }
         return p;
     }
 
     /**
-     * Главная точка входа: изолирует активное модальное окно карточки предмета/Кузницы
-     * и выдаёт по-позиционный план #1..#N строго из официального пула этого слота.
+     * Динамический расчёт позиций предмета из живого OCR-скана экрана.
      */
     public static OptimizationReport analyzeItemAffixes(
             List<IdleArcOcrEngine.OcrLine> ocrLines,
             SlotAffixAdvisor.GearSlot explicitSlot,
             DruidProfile profile) {
         if (ocrLines == null || ocrLines.isEmpty()) return null;
+        if (profile == null) profile = new DruidProfile();
 
         List<IdleArcOcrEngine.OcrLine> modalLines = IdleArcOcrEngine.isolateActiveModalLines(ocrLines);
         if (modalLines.isEmpty()) return null;
@@ -391,13 +352,25 @@ public class AffixPositionOptimizer {
             slotInferred = true;
         }
 
-        // СТРОГАЯ ГАРАНТИЯ: пул возможных замен берётся ТОЛЬКО из официального серверного пула этого слота!
         List<AffixType> pool = new ArrayList<>(getCompatiblePool(detectedSlot, isShieldBase));
-
-        ItemRollModel rollModel = calibrateRollModel(plain, rows);
+        ScannedItemHeader itemHdr = parseItemHeaderStats(plain);
+        ItemRollModel rollModel = calibrateRollModel(itemHdr, rows);
         int n = rows.size();
 
-        // Карта реальных небустованных значений статов, которые УЖЕ пойманы на этом предмете
+        // Формируем живой вектор состояния героя из отсканированных характеристик (или масштаба предмета)
+        LiveBuildSimulator.HeroState currentHeroState = LiveBuildSimulator.buildHeroState(
+                profile, rollModel.unitScale, itemHdr.flatAttack, itemHdr.baseDefense);
+
+        // Если предмет сейчас НАДЕТ («Снять» на экране), то для честного расчёта «что лучше по отношению»
+        // вычитаем текущие вторичные аффиксы этого предмета, получая чистую базу героя без этих 5 строк!
+        LiveBuildSimulator.HeroState stateWithoutAllRows = currentHeroState.copy();
+        if (itemHdr.isEquipped) {
+            for (ParsedAffixRow r : rows) {
+                stateWithoutAllRows.applyAffixDelta(r.type, -r.rolledValue, itemHdr.baseDefense);
+            }
+        }
+
+        // Запоминаем фактические небустованные роллы статов, уже стоящих на предмете
         final Map<AffixType, Double> observedUnboosted = new HashMap<>();
         for (ParsedAffixRow r : rows) {
             if (r.type != AffixType.EMPTY_POSITION && r.rolledValue > 0.0) {
@@ -405,182 +378,484 @@ public class AffixPositionOptimizer {
             }
         }
 
-        // 1) Для выбора ТОП-N типов аффиксов в пуле слота учитываем потенциал стата (или реальный высокий ролл, если он выше среднего)
-        final Map<AffixType, Double> selectionValues = new HashMap<>();
-        // 2) Для распределения позиционных Пробуждений [III..I] учитываем ФАКТИЧЕСКИЙ ролл уже стоящего на предмете стата
-        //    (чтобы никогда не снимать [II]/[III] с топ-ролла Урона питомца +494% ради мин-ролла Крит. урона +51%!)
-        final Map<AffixType, Double> awakenPlacementValues = new HashMap<>();
+        // Список множителей пробуждения предмета по убыванию [m_1 >= m_2 >= ... >= m_n]
+        List<Double> sortedMultsDesc = new ArrayList<>(n);
+        for (ParsedAffixRow r : rows) sortedMultsDesc.add(r.awakenMultiplier());
+        Collections.sort(sortedMultsDesc, Collections.<Double>reverseOrder());
 
-        for (AffixType cand : pool) {
-            double avgRoll = rollModel.expectedAvgRoll(cand, 1.0);
-            Double obs = observedUnboosted.get(cand);
-            double selRoll = (obs != null) ? Math.max(avgRoll, obs) : avgRoll;
-            double placeRoll = (obs != null) ? obs : avgRoll;
-            selectionValues.put(cand, evaluateAffixValue(cand, selRoll, detectedSlot, profile));
-            awakenPlacementValues.put(cand, evaluateAffixValue(cand, placeRoll, detectedSlot, profile));
-        }
+        // ПОЛНЫЙ МАТЕМАТИЧЕСКИЙ ПЕРЕБОР всех C(|pool|, n) комбинаций в симуляторе!
+        List<AffixType> chosenTop = LiveBuildSimulator.solveOptimalSubset(
+                stateWithoutAllRows, pool, sortedMultsDesc, rollModel,
+                observedUnboosted, itemHdr.baseDefense, profile.mode);
 
-        List<AffixType> rankedPool = new ArrayList<>(pool);
-        Collections.sort(rankedPool, new Comparator<AffixType>() {
-            @Override
-            public int compare(AffixType a, AffixType b) {
-                double va = selectionValues.containsKey(a) ? selectionValues.get(a) : 0.0;
-                double vb = selectionValues.containsKey(b) ? selectionValues.get(b) : 0.0;
-                return Double.compare(vb, va);
-            }
-        });
-
-        List<AffixType> chosenTop = new ArrayList<>();
-        for (int i = 0; i < rankedPool.size() && chosenTop.size() < n; i++) {
-            chosenTop.add(rankedPool.get(i));
-        }
-        while (chosenTop.size() < n && !rankedPool.isEmpty()) {
-            chosenTop.add(rankedPool.get(0));
-        }
-
-        // Сортируем выбранные топ-N статов по реальной выгоде от множителя Пробуждения [III -> II -> I -> 0]
+        // Сортируем выбранный оптимальный набор по реальной отдаче на фактических роллах для назначения Пробуждений
+        final LiveBuildSimulator.HeroState refBase = stateWithoutAllRows;
+        final double refObj = LiveBuildSimulator.computeTotalObjective(refBase, profile.mode);
+        final DruidProfile.BuildMode buildMode = profile.mode;
+        final double hdrDef = itemHdr.baseDefense;
         Collections.sort(chosenTop, new Comparator<AffixType>() {
             @Override
             public int compare(AffixType a, AffixType b) {
-                double va = awakenPlacementValues.containsKey(a) ? awakenPlacementValues.get(a) : 0.0;
-                double vb = awakenPlacementValues.containsKey(b) ? awakenPlacementValues.get(b) : 0.0;
-                return Double.compare(vb, va);
+                double rollA = observedUnboosted.containsKey(a) ? observedUnboosted.get(a) : rollModel.expectedAvgRoll(a, 1.0);
+                double rollB = observedUnboosted.containsKey(b) ? observedUnboosted.get(b) : rollModel.expectedAvgRoll(b, 1.0);
+                LiveBuildSimulator.HeroState sa = refBase.copy();
+                sa.applyAffixDelta(a, rollA, hdrDef);
+                LiveBuildSimulator.HeroState sb = refBase.copy();
+                sb.applyAffixDelta(b, rollB, hdrDef);
+                return Double.compare(
+                        LiveBuildSimulator.computeTotalObjective(sb, buildMode) / refObj,
+                        LiveBuildSimulator.computeTotalObjective(sa, buildMode) / refObj);
             }
         });
 
-        // Разделяем позиции на УЖЕ ПОЙМАННЫЕ топ-статы (их НЕ надо перековывать!) и позиции ПОД ЗАМЕНУ:
-        // это гарантирует, что компаньон НИКОГДА не предложит ловить на Позиции #3 стат, который УЖЕ стоит на Позиции #5!
+        // Уже пойманные статы из оптимального набора остаются на своих строках, а на позиции под замену
+        // назначаются недостающие статы из chosenTop в порядке убывания множителя пробуждения
         Set<AffixType> chosenTopSet = new HashSet<>(chosenTop);
         Set<AffixType> alreadyPresentTop = new HashSet<>();
         List<Integer> replaceIndices = new ArrayList<>();
-
         List<AffixType> idealByPos = new ArrayList<>(Collections.nCopies(n, AffixType.PET_DAMAGE));
+
         for (int i = 0; i < n; i++) {
             AffixType curT = rows.get(i).type;
             if (curT != AffixType.EMPTY_POSITION && chosenTopSet.contains(curT) && !alreadyPresentTop.contains(curT)) {
-                idealByPos.set(i, curT); // уже пойманный BiS-аффикс остаётся на своей строке!
+                idealByPos.set(i, curT);
                 alreadyPresentTop.add(curT);
             } else {
                 replaceIndices.add(i);
             }
         }
 
-        // Список реально ОТСУТСТВУЮЩИХ на предмете топ-аффиксов (их ровно столько же, сколько replaceIndices!)
         List<AffixType> missingStats = new ArrayList<>();
         for (AffixType st : chosenTop) {
-            if (!alreadyPresentTop.contains(st)) {
-                missingStats.add(st);
-            }
+            if (!alreadyPresentTop.contains(st)) missingStats.add(st);
         }
-        // Сортируем позиции под замену по убыванию Пробуждения [III -> II -> I -> 0], чтобы самый сильный новый стат встал на лучший множитель
         Collections.sort(replaceIndices, new Comparator<Integer>() {
             @Override
             public int compare(Integer i1, Integer i2) {
                 int c = Integer.compare(rows.get(i2).awakenBonusPct, rows.get(i1).awakenBonusPct);
-                if (c != 0) return c;
-                return Integer.compare(i1, i2);
+                return c != 0 ? c : Integer.compare(i1, i2);
             }
         });
         for (int k = 0; k < replaceIndices.size() && k < missingStats.size(); k++) {
             idealByPos.set(replaceIndices.get(k), missingStats.get(k));
         }
 
-        // Дополнительно проверяем, лежит ли максимальное Пробуждение [III/II] на самом выгодном стате,
-        // или после перековки выгодно поменять Пробуждения местами («Перераспределение пробуждения» в Кузнице)
+        // Определяем, какой бонус Пробуждения даёт максимум итоговой функции для каждого стата из chosenTop
         List<Integer> awakenSortedPos = new ArrayList<>();
         for (int i = 0; i < n; i++) awakenSortedPos.add(i);
         Collections.sort(awakenSortedPos, new Comparator<Integer>() {
             @Override
             public int compare(Integer i1, Integer i2) {
                 int c = Integer.compare(rows.get(i2).awakenBonusPct, rows.get(i1).awakenBonusPct);
-                if (c != 0) return c;
-                return Integer.compare(i1, i2);
+                return c != 0 ? c : Integer.compare(i1, i2);
             }
         });
-        // Какой бонус Пробуждения в идеале должен достаться каждому из chosenTop (уже отсортированному по awakenPlacementValues)
         Map<AffixType, Integer> optimalAwakenPctForStat = new HashMap<>();
         for (int k = 0; k < n && k < chosenTop.size(); k++) {
             optimalAwakenPctForStat.put(chosenTop.get(k), rows.get(awakenSortedPos.get(k)).awakenBonusPct);
         }
 
-        double curSum = 0.0;
-        double idealSum = 0.0;
-        int keepCount = 0;
+        // Считаем точное совместное отношение ИДЕАЛЬНОЙ сборки к ТЕКУЩЕЙ сборке предмета!
+        LiveBuildSimulator.HeroState stateWithCurrentItem = stateWithoutAllRows.copy();
+        for (ParsedAffixRow r : rows) {
+            stateWithCurrentItem.applyAffixDelta(r.type, r.rolledValue, itemHdr.baseDefense);
+        }
+
+        LiveBuildSimulator.HeroState stateWithIdealItem = stateWithoutAllRows.copy();
+        for (int i = 0; i < n; i++) {
+            AffixType target = idealByPos.get(i);
+            int bestAwkPct = optimalAwakenPctForStat.containsKey(target)
+                    ? optimalAwakenPctForStat.get(target) : rows.get(i).awakenBonusPct;
+            double bestMult = 1.0 + bestAwkPct / 100.0;
+            double unboosted = (rows.get(i).type == target && rows.get(i).rolledValue > 0)
+                    ? Math.max(rows.get(i).rolledValue / rows.get(i).awakenMultiplier(), rollModel.expectedAvgRoll(target, 1.0))
+                    : rollModel.expectedAvgRoll(target, 1.0);
+            stateWithIdealItem.applyAffixDelta(target, unboosted * bestMult, itemHdr.baseDefense);
+        }
+
+        double objWithoutItem = LiveBuildSimulator.computeTotalObjective(stateWithoutAllRows, profile.mode);
+        double objCurrent = LiveBuildSimulator.computeTotalObjective(stateWithCurrentItem, profile.mode);
+        double objIdeal = LiveBuildSimulator.computeTotalObjective(stateWithIdealItem, profile.mode);
+
+        double curContributionPct = ((objCurrent / objWithoutItem) - 1.0) * 100.0;
+        double idealContributionPct = ((objIdeal / objWithoutItem) - 1.0) * 100.0;
+        // Относительный прирост идеальной раскладки ПО ОТНОШЕНИЮ к текущему предмету:
+        double relativeUpgradePct = Math.max(0.0, ((objIdeal / objCurrent) - 1.0) * 100.0);
+
         int moveAwakenCount = 0;
         int rerollCount = 0;
-        int awakenedRerollCount = 0;
-
-        Set<AffixType> idealSet = new HashSet<>(idealByPos);
         for (int i = 0; i < n; i++) {
             ParsedAffixRow r = rows.get(i);
             AffixType target = idealByPos.get(i);
-            double curV = evaluateAffixValue(r.type, r.rolledValue, detectedSlot, profile);
-            int bestAwkPct = optimalAwakenPctForStat.containsKey(target)
-                    ? optimalAwakenPctForStat.get(target)
-                    : r.awakenBonusPct;
-            double bestMult = 1.0 + (bestAwkPct / 100.0);
-            double unboostedTarget = (r.type == target && r.rolledValue > 0)
-                    ? Math.max(r.rolledValue / r.awakenMultiplier(), rollModel.expectedAvgRoll(target, 1.0))
-                    : rollModel.expectedAvgRoll(target, 1.0);
-            double idealV = evaluateAffixValue(target, unboostedTarget * bestMult, detectedSlot, profile);
-            curSum += Math.max(0.0, curV);
-            idealSum += Math.max(0.0, idealV);
-
             if (r.type == target) {
-                if (bestAwkPct > r.awakenBonusPct && rerollCount == 0) {
-                    moveAwakenCount++;
-                } else {
-                    keepCount++;
-                }
+                int optAwk = optimalAwakenPctForStat.containsKey(target)
+                        ? optimalAwakenPctForStat.get(target) : r.awakenBonusPct;
+                if (optAwk > r.awakenBonusPct) moveAwakenCount++;
             } else {
                 rerollCount++;
-                if (r.awakenTier > 0) {
-                    awakenedRerollCount++;
-                }
             }
         }
-
-        double netGainDpsEq = Math.max(0.0, idealSum - curSum);
 
         ScreenAnalyzer.VerdictColor color;
         String badge;
         String headline;
         String slotChip = isShieldBase ? "🛡️ Щит" : detectedSlot.shortChip;
         String badgePrefix = slotInferred ? "📦 Предмет" : slotChip;
-        String headlineSlot = slotInferred
-                ? "📦 Предмет (нажми точный слот выше, если шапка скрыта)"
-                : slotChip;
 
-        if (keepCount == n) {
+        if (rerollCount == 0 && moveAwakenCount == 0) {
             color = ScreenAnalyzer.VerdictColor.GOOD;
-            badge = "✅ " + badgePrefix + ": " + n + "/" + n + " ИДЕАЛ!";
-            headline = "👑 " + headlineSlot + " — все " + n + " из " + n + " аффиксов стоят идеально!";
-        } else if (rerollCount == 0 && moveAwakenCount > 0) {
+            badge = "✅ " + badgePrefix + ": " + n + "/" + n + " ОПТИМУМ";
+            headline = "👑 " + badgePrefix + " — все " + n + " позиций математически оптимальны!";
+        } else if (rerollCount == 0) {
             color = ScreenAnalyzer.VerdictColor.GOOD;
-            badge = "💎 " + badgePrefix + ": перекинь Пробуждение (+" + fmt1(netGainDpsEq) + "%)";
-            headline = "💎 " + headlineSlot + ": все статы топовые — переставь Пробуждение (+"
-                    + fmt1(netGainDpsEq) + "% к ценности)!";
+            badge = "💎 " + badgePrefix + ": переставь ★ (+" + fmt2(relativeUpgradePct) + "%)";
+            headline = "💎 " + badgePrefix + ": статы оптимальны — перераспредели Пробуждение (+"
+                    + fmt2(relativeUpgradePct) + "% к итоговой силе)";
         } else if (rerollCount <= 2) {
             color = ScreenAnalyzer.VerdictColor.WARN;
-            badge = "⚒️ " + badgePrefix + ": замени " + rerollCount + " из " + n + " (+" + fmt1(netGainDpsEq) + "%)";
-            headline = "⚒️ " + headlineSlot + ": оставляем " + (n - rerollCount) + " из " + n
-                    + ", меняем " + rerollCount + " поз. -> +" + fmt1(netGainDpsEq) + "% к эффективности!";
+            badge = "⚒️ " + badgePrefix + ": замени " + rerollCount + "/" + n + " (+" + fmt2(relativeUpgradePct) + "%)";
+            headline = "⚒️ " + badgePrefix + ": расчёт скана — оставить " + (n - rerollCount) + ", заменить "
+                    + rerollCount + " поз. (+" + fmt2(relativeUpgradePct) + "% к персонажу)";
         } else {
             color = ScreenAnalyzer.VerdictColor.BAD;
-            badge = "🔄 " + badgePrefix + ": под перековку " + rerollCount + "/" + n + " (+" + fmt1(netGainDpsEq) + "%)";
-            headline = "🔄 " + headlineSlot + ": нужно заменить " + rerollCount + " из " + n
-                    + " аффиксов (потенциал +" + fmt1(netGainDpsEq) + "%)";
+            badge = "🔄 " + badgePrefix + ": замени " + rerollCount + "/" + n + " (+" + fmt2(relativeUpgradePct) + "%)";
+            headline = "🔄 " + badgePrefix + ": расчёт скана — выгодно заменить " + rerollCount + " из " + n
+                    + " поз. (+" + fmt2(relativeUpgradePct) + "% к персонажу)";
         }
 
-        String details = buildDetailedPlan(detectedSlot, slotInferred, isShieldBase, pool, rows, idealByPos,
-                idealSet, optimalAwakenPctForStat, rollModel, profile, curSum, idealSum, keepCount, rerollCount,
-                moveAwakenCount, awakenedRerollCount);
+        String details = buildLiveAnalyticalReport(detectedSlot, slotInferred, isShieldBase, itemHdr,
+                pool, rows, idealByPos, optimalAwakenPctForStat, rollModel, currentHeroState,
+                profile, curContributionPct, idealContributionPct, relativeUpgradePct, rerollCount);
 
         return new OptimizationReport(detectedSlot, slotInferred, isShieldBase, rows, idealByPos,
-                curSum, idealSum, badge, headline, details, color);
+                curContributionPct, idealContributionPct, badge, headline, details, color);
     }
 
-    /** Находит индекс строки заголовка секции «АФФИКСЫ» по списку строк */
+    /**
+     * Строит полностью прозрачный аналитический отчёт, где для КАЖДОЙ позиции показан живой расчёт кандидатов
+     * относительно состояния персонажа без этой строки (никаких скрытых шаблонов!).
+     */
+    private static String buildLiveAnalyticalReport(
+            SlotAffixAdvisor.GearSlot slot,
+            boolean slotInferred,
+            boolean isShieldBase,
+            ScannedItemHeader itemHdr,
+            List<AffixType> compatiblePool,
+            List<ParsedAffixRow> rows,
+            List<AffixType> idealByPos,
+            Map<AffixType, Integer> optimalAwakenPctForStat,
+            ItemRollModel rollModel,
+            LiveBuildSimulator.HeroState currentHeroState,
+            DruidProfile profile,
+            double curContributionPct,
+            double idealContributionPct,
+            double relativeUpgradePct,
+            int rerollCount) {
+
+        StringBuilder sb = new StringBuilder();
+
+        // Блок 1: прозрачная телеметрия визуального сканирования (что именно увидел OCR и от какой базы идёт расчёт)
+        sb.append("📷 СЧИТАНО С ЭКРАНА: ")
+          .append(isShieldBase ? "Щит/Оффхенд" : slot.shortChip)
+          .append(itemHdr.awakenLevel > 0 ? (" · А" + itemHdr.awakenLevel + (itemHdr.enhancementLevel > 0 ? " +" + itemHdr.enhancementLevel : "")) : "")
+          .append(itemHdr.isEquipped ? " · [НАДЕТО на герое]" : " · [В СУМКЕ]")
+          .append(" · масштаб роллов ×").append(fmt1(rollModel.unitScale)).append("\n");
+
+        if (profile.hasScannedStats) {
+            sb.append("📊 База сравнения (из скана «Характеристик персонажа»): Крит ")
+              .append(fmt0(profile.critChance)).append("%/").append(fmt0(profile.critDamage))
+              .append("%, Дв.удар ").append(fmt0(profile.doubleHitChance))
+              .append("%, Дв.урон ").append(fmt0(profile.doubleDamageChance))
+              .append("%, Сниж.урона ").append(fmt1(profile.damageReductionRaw))
+              .append("%, Уклонение ").append(fmt1(profile.dodgeRaw)).append("%.\n");
+        } else {
+            sb.append("⚠️ Окно «Характеристики персонажа» ещё не сканировалось — расчёт выполнен пропорционально числам самого предмета. Открой «Характеристики персонажа» и нажми СКАН для 100% учёта твоих капов!\n");
+        }
+
+        if (slotInferred) {
+            sb.append("⚠️ Заголовок предмета вне кадра — слот определён по набору статов. Если открыт другой слот, нажми его кнопку выше.\n");
+        }
+
+        Set<AffixType> idealSet = new HashSet<>(idealByPos);
+        int n = rows.size();
+
+        // Построчный относительный анализ каждой позиции #1..#n
+        for (int i = 0; i < n; i++) {
+            ParsedAffixRow r = rows.get(i);
+            AffixType assignedTarget = idealByPos.get(i);
+            double mult = r.awakenMultiplier();
+
+            sb.append("\n━━ Позиция #").append(r.index).append(formatAwakenBadge(r)).append(" ━━\n");
+
+            // Состояние героя БЕЗ конкретно этой строки #i
+            LiveBuildSimulator.HeroState stateWithoutThisRow = currentHeroState.copy();
+            if (itemHdr.isEquipped && r.type != AffixType.EMPTY_POSITION) {
+                stateWithoutThisRow.applyAffixDelta(r.type, -r.rolledValue, itemHdr.baseDefense);
+            }
+
+            // Оцениваем ТЕКУЩИЙ стат на этой строке относительно stateWithoutThisRow
+            LiveBuildSimulator.CandidateEvaluation curEval = null;
+            if (r.type != AffixType.EMPTY_POSITION) {
+                curEval = LiveBuildSimulator.evaluateCandidate(
+                        stateWithoutThisRow, r.type, r.rolledValue, r.rolledValue, r.rolledValue,
+                        itemHdr.baseDefense, profile.mode);
+                sb.append("  Скан строки: ").append(r.type.taggedName())
+                  .append(" (").append(formatStatRoll(r.type, r.rolledValue)).append(") → ")
+                  .append(curEval.mathExplanation)
+                  .append(" [итог: +").append(fmt2(curEval.totalObjectiveGainPct)).append("%]\n");
+            } else {
+                sb.append("  Скан строки: ⬜ Пустая позиция (вклад +0.00%)\n");
+            }
+
+            // Считаем ВСЕ допустимые аффиксы пула слота на этой позиции (при множителе mult)
+            // кроме тех, что уже заняты на ДРУГИХ строках предмета (дубликаты на одном предмете запрещены игрой!)
+            Set<AffixType> occupiedOnOtherKeptRows = new HashSet<>();
+            for (int j = 0; j < n; j++) {
+                if (j != i && rows.get(j).type == idealByPos.get(j) && rows.get(j).type != AffixType.EMPTY_POSITION) {
+                    occupiedOnOtherKeptRows.add(rows.get(j).type);
+                }
+            }
+
+            List<LiveBuildSimulator.CandidateEvaluation> rankedFreeCandidates = new ArrayList<>();
+            for (AffixType cand : compatiblePool) {
+                if (occupiedOnOtherKeptRows.contains(cand)) continue;
+                double avgR = (cand == r.type && r.rolledValue > 0)
+                        ? r.rolledValue
+                        : rollModel.expectedAvgRoll(cand, mult);
+                double minR = rollModel.expectedMinRoll(cand, mult);
+                double maxR = rollModel.expectedMaxRoll(cand, mult);
+                rankedFreeCandidates.add(LiveBuildSimulator.evaluateCandidate(
+                        stateWithoutThisRow, cand, avgR, minR, maxR, itemHdr.baseDefense, profile.mode));
+            }
+            Collections.sort(rankedFreeCandidates, new Comparator<LiveBuildSimulator.CandidateEvaluation>() {
+                @Override
+                public int compare(LiveBuildSimulator.CandidateEvaluation a, LiveBuildSimulator.CandidateEvaluation b) {
+                    return Double.compare(b.totalObjectiveGainPct, a.totalObjectiveGainPct);
+                }
+            });
+
+            double curObjGain = curEval != null ? curEval.totalObjectiveGainPct : 0.0;
+
+            if (r.type == assignedTarget) {
+                int optAwkPct = optimalAwakenPctForStat.containsKey(r.type)
+                        ? optimalAwakenPctForStat.get(r.type) : r.awakenBonusPct;
+                sb.append("  ✅ РЕШЕНИЕ СИМУЛЯТОРА: ОСТАВИТЬ «").append(r.type.taggedName())
+                  .append("» (входит в лучший расчётный набор ").append(n).append(" статов этого слота).\n");
+
+                if (optAwkPct > r.awakenBonusPct) {
+                    sb.append("  💎 По Пробуждению: после доводки перекинь сюда Пробуждение ")
+                      .append(roman(optAwkPct / 10)).append(" (+").append(optAwkPct)
+                      .append("%) через «Перераспределение пробуждения».\n");
+                }
+
+                // Математическая проверка диапазона самого числового ролла
+                if (r.type.ignoresAffixCap && r.rolledValue > 0) {
+                    double minR = rollModel.expectedMinRoll(r.type, mult);
+                    double maxR = rollModel.expectedMaxRoll(r.type, mult);
+                    if (maxR > minR * 1.35 && r.rolledValue < 0.62 * maxR) {
+                        LiveBuildSimulator.CandidateEvaluation maxEval = LiveBuildSimulator.evaluateCandidate(
+                                stateWithoutThisRow, r.type, maxR, minR, maxR, itemHdr.baseDefense, profile.mode);
+                        double upside = Math.max(0.0, maxEval.totalObjectiveGainPct - curObjGain);
+                        sb.append("  💡 Диапазон ролла на этом предмете: ")
+                          .append(formatStatRoll(r.type, minR)).append("..").append(formatStatRoll(r.type, maxR))
+                          .append(" (сейчас ").append(formatStatRoll(r.type, r.rolledValue))
+                          .append(" — переброс самого числа может дать ещё до +").append(fmt2(upside)).append("%).\n");
+                    }
+                }
+            } else {
+                // Выводим живую таблицу сравнения топ-3 свободных кандидатов пула по отношению к текущему стату!
+                LiveBuildSimulator.CandidateEvaluation targetEval = LiveBuildSimulator.evaluateCandidate(
+                        stateWithoutThisRow,
+                        assignedTarget,
+                        rollModel.expectedAvgRoll(assignedTarget, mult),
+                        rollModel.expectedMinRoll(assignedTarget, mult),
+                        rollModel.expectedMaxRoll(assignedTarget, mult),
+                        itemHdr.baseDefense,
+                        profile.mode);
+                double netDelta = targetEval.totalObjectiveGainPct - curObjGain;
+
+                if (r.awakenTier > 0) {
+                    sb.append("  🔒 [СЛОТ ПРОБУЖДЁН ").append(roman(r.awakenTier)).append("] ");
+                } else {
+                    sb.append("  🔄 ");
+                }
+                sb.append("ВЫГОДНЕЕ ЗАМЕНИТЬ НА: «").append(assignedTarget.taggedName())
+                  .append("» (чистый выигрыш к текущему: ")
+                  .append(netDelta >= 0 ? "+" : "").append(fmt2(netDelta)).append("%)\n");
+
+                sb.append("  📐 Сравнение свободных аффиксов пула на месте #").append(r.index)
+                  .append(" (×").append(fmt2(mult)).append("):\n");
+                int showTop = Math.min(3, rankedFreeCandidates.size());
+                for (int cIdx = 0; cIdx < showTop; cIdx++) {
+                    LiveBuildSimulator.CandidateEvaluation ce = rankedFreeCandidates.get(cIdx);
+                    double relToCurrent = ce.totalObjectiveGainPct - curObjGain;
+                    sb.append("     ").append(cIdx + 1).append(") ").append(ce.type.taggedName())
+                      .append(" ").append(formatRollBand(ce.type, ce.minRoll, ce.expectedRoll, ce.maxRoll))
+                      .append(" → итог +").append(fmt2(ce.totalObjectiveGainPct)).append("% (макс. до +")
+                      .append(fmt2(ce.maxRollObjectiveGainPct)).append("%; к текущему ")
+                      .append(relToCurrent >= 0 ? "+" : "").append(fmt2(relToCurrent)).append("%)\n");
+                }
+                if (r.awakenTier > 0) {
+                    int freePos = findFirstUnawakenedRerollPos(rows, idealSet);
+                    if (freePos > 0) {
+                        sb.append("  ⚒️ Кузница: сначала перенеси замок Пробуждения ").append(roman(r.awakenTier))
+                          .append(" «Перераспределением» (либо лови стат на свободной Позиции #").append(freePos)
+                          .append(" и перекинь на неё ").append(roman(r.awakenTier)).append(").\n");
+                    } else {
+                        sb.append("  ⚒️ Кузница: сними замок Пробуждения ").append(roman(r.awakenTier))
+                          .append(" «Перераспределением», перекуй аффикс и верни Пробуждение.\n");
+                    }
+                }
+            }
+        }
+
+        sb.append("\n📊 СВОДНЫЙ БАЛАНС ПРЕДМЕТА:\n");
+        sb.append("• Вклад текущих ").append(n).append(" позиций: +").append(fmt2(curContributionPct))
+          .append("% → Расчётный оптимум слота: +").append(fmt2(idealContributionPct))
+          .append("% (относительный прирост предмета: +").append(fmt2(relativeUpgradePct)).append("%).\n");
+        if (rerollCount == 0) {
+            sb.append("• Все типы аффиксов уже дают максимальную математическую отдачу под текущие характеристики.\n");
+        }
+
+        sb.append("\n📚 Допустимый пул слота в игре (").append(formatPoolSummary(slot, compatiblePool)).append(")");
+        return sb.toString();
+    }
+
+    /** Извлекает данные шапки карточки предмета (надет ли предмет, плоская атака/защита базы, А1..А6 +заточка) */
+    static ScannedItemHeader parseItemHeaderStats(List<String> plainLines) {
+        boolean hasUnequipBtn = false;
+        boolean hasEquipBtn = false;
+        double flatAtk = 0.0;
+        double baseDef = 0.0;
+        int awk = 0;
+        int enh = 0;
+
+        int affixIdx = findAffixHeaderIndexFromStrings(plainLines);
+        int hdrLimit = affixIdx > 0 ? affixIdx : Math.min(plainLines.size(), 10);
+
+        for (int i = 0; i < plainLines.size(); i++) {
+            String raw = plainLines.get(i);
+            String low = DruidKnowledgeBase.normalizeForMatch(raw);
+
+            if (low.contains("снять") || low.startsWith("надето")) hasUnequipBtn = true;
+            if (low.equals("надеть") || low.startsWith("надеть ")) hasEquipBtn = true;
+
+            if (i < hdrLimit) {
+                if (awk == 0) {
+                    Matcher m = HEADER_AWAKEN_ENH.matcher(raw);
+                    if (m.find()) {
+                        try {
+                            awk = Integer.parseInt(m.group(1));
+                            if (m.group(2) != null) enh = Integer.parseInt(m.group(2));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                if (enh == 0 && i < 5) {
+                    Matcher mp = HEADER_PLUS_ENH.matcher(raw);
+                    if (mp.find()) {
+                        try {
+                            enh = Integer.parseInt(mp.group(1));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                if ((low.contains("физический урон") || low.contains("урон атаки") || low.contains("базовый урон"))
+                        && !raw.contains("%")) {
+                    double v = DruidKnowledgeBase.extractFirstNumber(raw);
+                    if (v > flatAtk) flatAtk = v;
+                }
+                if (low.contains("защит") && !raw.contains("%")) {
+                    double v = DruidKnowledgeBase.extractFirstNumber(raw);
+                    if (v > baseDef) baseDef = v;
+                }
+            }
+        }
+        boolean isEquipped = hasUnequipBtn && !hasEquipBtn;
+        return new ScannedItemHeader(isEquipped, flatAtk, baseDef, awk, enh);
+    }
+
+    static ItemRollModel calibrateRollModel(ScannedItemHeader hdr, List<ParsedAffixRow> rows) {
+        int itemAwaken = hdr.awakenLevel;
+        int enh = hdr.enhancementLevel;
+
+        double priorUnitScale = 8.0;
+        if (itemAwaken > 0) {
+            double effEnh = enh <= 90 ? enh : (90.0 + 0.5 * (enh - 90.0));
+            priorUnitScale = 17.2 * (1.0 + 0.16 * itemAwaken) * (1.0 + 0.025 * effEnh);
+        }
+
+        double lowerBound = 0.0;
+        double upperBound = Double.POSITIVE_INFINITY;
+        double weightedSum = 0.0;
+        int uncappedCount = 0;
+
+        double observedProcCap = 0.0;
+        double observedBloodthirstCap = 0.0;
+
+        for (ParsedAffixRow r : rows) {
+            if (r.type == AffixType.EMPTY_POSITION || r.rolledValue <= 0.0) continue;
+            double unboosted = r.rolledValue / r.awakenMultiplier();
+
+            if (r.type.ignoresAffixCap && r.type.baseMin > 0.0 && r.type.baseMax > 0.0) {
+                double rowLo = unboosted / r.type.baseMax;
+                double rowHi = unboosted / r.type.baseMin;
+                if (rowLo > lowerBound) lowerBound = rowLo;
+                if (rowHi < upperBound) upperBound = rowHi;
+                weightedSum += unboosted / r.type.baseAvg;
+                uncappedCount++;
+            } else if (r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.DOUBLE_HIT) {
+                if (unboosted > observedProcCap) observedProcCap = unboosted;
+            } else if (r.type == AffixType.BLOODTHIRST) {
+                if (unboosted > observedBloodthirstCap) observedBloodthirstCap = unboosted;
+                if (itemAwaken == 0 && unboosted >= 16.0 && unboosted <= 25.0) {
+                    itemAwaken = (int) Math.round(unboosted - 15.0);
+                }
+            }
+        }
+
+        double unitScale;
+        if (uncappedCount > 0) {
+            double avgEst = weightedSum / uncappedCount;
+            if (itemAwaken > 0) {
+                avgEst = 0.55 * avgEst + 0.45 * priorUnitScale;
+            }
+            if (lowerBound <= upperBound * 1.03) {
+                double lo = Math.min(lowerBound, upperBound);
+                double hi = Math.max(lowerBound, upperBound);
+                unitScale = Math.max(lo, Math.min(hi, avgEst));
+            } else {
+                unitScale = Math.max(lowerBound * 0.95, avgEst);
+            }
+        } else if (observedProcCap > 0.0) {
+            unitScale = (observedProcCap >= 35.0)
+                    ? Math.max(priorUnitScale, (observedProcCap - 27.0) / 0.45)
+                    : (observedProcCap / 1.5);
+        } else {
+            unitScale = priorUnitScale;
+        }
+        unitScale = Math.max(1.0, Math.min(150.0, unitScale));
+
+        if (itemAwaken == 0 && unitScale >= 30.0) {
+            itemAwaken = (unitScale >= 46.0) ? 6 : 5;
+        }
+
+        double procCapBase;
+        if (observedProcCap > 0.0) {
+            procCapBase = observedProcCap;
+        } else if (unitScale >= 24.0) {
+            procCapBase = 26.5 + 0.47 * unitScale;
+        } else {
+            procCapBase = unitScale * 1.5;
+        }
+
+        double bloodthirstCap = observedBloodthirstCap > 0.0
+                ? observedBloodthirstCap
+                : (15.0 + Math.max(0, itemAwaken) * 1.0);
+
+        return new ItemRollModel(itemAwaken, enh, unitScale, procCapBase, bloodthirstCap);
+    }
+
     public static int findAffixHeaderIndexFromStrings(List<String> lines) {
         if (lines == null) return -1;
         for (int i = 0; i < lines.size(); i++) {
@@ -641,10 +916,6 @@ public class AffixPositionOptimizer {
         return MAX_AFFIXES_PER_ITEM;
     }
 
-    /**
-     * Извлекает до 5 вторичных аффиксов предмета из активного модального окна (со склейкой 2-строчных переносов
-     * вида «Здоровье за удар и за убийство» + «+20%» и распознаванием голубых/фиолетовых значков [I..V]).
-     */
     static List<ParsedAffixRow> extractSecondaryAffixRows(List<IdleArcOcrEngine.OcrLine> ocrLines,
                                                           SlotAffixAdvisor.GearSlot headerSlot,
                                                           boolean isShieldBase) {
@@ -668,9 +939,7 @@ public class AffixPositionOptimizer {
             }
         }
 
-        if (maxAllowedRows <= 0) {
-            return new ArrayList<>();
-        }
+        if (maxAllowedRows <= 0) return new ArrayList<>();
 
         if (!sawExplicitAffixHeader) {
             for (int i = 0; i < ocrLines.size(); i++) {
@@ -682,8 +951,6 @@ public class AffixPositionOptimizer {
             }
         }
 
-        // Предварительно склеиваем 2-строчные переносы внутри блока АФФИКСЫ:
-        // напр. строка 1: «Здоровье за удар и за убийство», строка 2: «+20%»
         List<IdleArcOcrEngine.OcrLine> mergedSectionLines = new ArrayList<>();
         for (int i = startIdx; i < endIdx; i++) {
             IdleArcOcrEngine.OcrLine cur = ocrLines.get(i);
@@ -721,12 +988,8 @@ public class AffixPositionOptimizer {
             String raw = ol.text.trim();
             String low = DruidKnowledgeBase.normalizeForMatch(raw);
 
-            if (raw.length() < 3) continue;
-            if (isNonAffixMetadataLine(low)) continue;
-
-            if (!sawExplicitAffixHeader && rawCandidates.isEmpty() && isLikelyImplicitHeaderLine(low, raw)) {
-                continue;
-            }
+            if (raw.length() < 3 || isNonAffixMetadataLine(low)) continue;
+            if (!sawExplicitAffixHeader && rawCandidates.isEmpty() && isLikelyImplicitHeaderLine(low, raw)) continue;
 
             if (low.contains("заполните позицию") || low.contains("пустая позиция")
                     || low.contains("выберите аффикс") || (low.contains("добавьте") && low.contains("кузниц"))) {
@@ -743,9 +1006,8 @@ public class AffixPositionOptimizer {
             double statVal = extractPlusStatValue(raw);
             List<Double> nums = extractAllNumbers(raw);
             if (statVal <= 0.0 && nums.isEmpty()) continue;
-            if (statVal <= 0.0) {
-                statVal = nums.get(0);
-            }
+            if (statVal <= 0.0) statVal = nums.get(0);
+
             int[] awaken = detectAwakeningOnRow(ol, raw);
 
             if (sawExplicitAffixHeader) {
@@ -757,14 +1019,9 @@ public class AffixPositionOptimizer {
             } else {
                 int prevDup = -1;
                 for (int k = 0; k < rawCandidates.size(); k++) {
-                    if (rawCandidates.get(k).type == type) {
-                        prevDup = k;
-                        break;
-                    }
+                    if (rawCandidates.get(k).type == type) { prevDup = k; break; }
                 }
-                if (prevDup >= 0) {
-                    rawCandidates.remove(prevDup);
-                }
+                if (prevDup >= 0) rawCandidates.remove(prevDup);
                 rawCandidates.add(new ParsedAffixRow(
                         rawCandidates.size() + 1, type, raw, statVal, hasPct, awaken[0], awaken[1]));
             }
@@ -776,8 +1033,7 @@ public class AffixPositionOptimizer {
 
         int cap = Math.min(MAX_AFFIXES_PER_ITEM, maxAllowedRows);
         if (rawCandidates.size() > cap) {
-            rawCandidates = new ArrayList<>(
-                    rawCandidates.subList(rawCandidates.size() - cap, rawCandidates.size()));
+            rawCandidates = new ArrayList<>(rawCandidates.subList(rawCandidates.size() - cap, rawCandidates.size()));
         }
 
         List<ParsedAffixRow> result = new ArrayList<>(rawCandidates.size());
@@ -830,26 +1086,16 @@ public class AffixPositionOptimizer {
         return false;
     }
 
-    /**
-     * Классифицирует все 26 официальных русских шаблонов аффиксов IdleArc (из libapp.so)
-     * с математической сверкой против слота предмета, когда слот известен из шапки.
-     */
     static AffixType classifyAffixName(String low, String raw, boolean hasPct,
                                        SlotAffixAdvisor.GearSlot headerSlot, boolean isShieldBase) {
-        // 1. Стихийные конверсии урона оружия («{value}% урона преобразуется в Огонь/Воду/Воздух/Землю/Яд/Природу»)
         if (low.contains("преобразуетс") || low.contains("преобразование в") || low.contains("преобразовано в")
                 || low.contains("конверс")) {
             return AffixType.ELEMENTAL_CONVERT;
         }
-
-        // 2. Урон питомца % (`of Pet Damage`)
         if (low.contains("урон питомц") || low.contains("урона питомц") || low.contains("урону питомц")
                 || low.contains("урон пит") || (low.contains("питомц") && low.contains("урон"))) {
             return AffixType.PET_DAMAGE;
         }
-
-        // 3. Эксклюзив Факела: «Здоровье за удар и за убийство %» (`of Bloodthirst`)
-        // На Факеле НЕ существует ни плоского Здоровья, ни плоских LoH/LoK!
         if ((low.contains("за удар") && (low.contains("убийств") || low.contains("и за") || hasPct))
                 || low.contains("жажда крови") || low.contains("жажды крови")) {
             return AffixType.BLOODTHIRST;
@@ -858,8 +1104,6 @@ public class AffixPositionOptimizer {
             return AffixType.BLOODTHIRST;
         }
 
-        // 4. Двойной урон % (`of Devastation`) vs Двойной удар % (`of Double Hit`)
-        // На Факеле и Броне/Шлеме/Перчатках/Сапогах НЕ существует `of Double Hit` во вторичных аффиксах!
         boolean slotForbidsDoubleHit = (headerSlot == SlotAffixAdvisor.GearSlot.TORCH
                 || headerSlot == SlotAffixAdvisor.GearSlot.HELMET
                 || headerSlot == SlotAffixAdvisor.GearSlot.CHEST
@@ -874,7 +1118,6 @@ public class AffixPositionOptimizer {
             return slotForbidsDoubleHit ? AffixType.DOUBLE_DAMAGE : AffixType.DOUBLE_HIT;
         }
 
-        // 5. Крит. урон % (`of Crit Damage`) и Шанс крита % (`of Crit Chance`)
         if (low.contains("шанс крит") || low.contains("крит. шанс") || low.contains("крит. удара")
                 || low.contains("критического удара")) {
             return AffixType.CRIT_CHANCE;
@@ -884,7 +1127,6 @@ public class AffixPositionOptimizer {
             return AffixType.CRIT_DAMAGE;
         }
 
-        // 6. Характеристики (`of Intelligence`, `of Dexterity`, `of Strength`)
         if (low.contains("интеллект")) return AffixType.INTELLIGENCE;
         if (low.contains("ловкост")) return AffixType.DEXTERITY;
         if ((low.startsWith("сила") || low.contains(" к силе") || low.contains("силы"))
@@ -892,11 +1134,9 @@ public class AffixPositionOptimizer {
             return AffixType.STRENGTH;
         }
 
-        // 7. Снижение урона % (`of Warding`) и Шанс уклонения % (`Evasive`)
         if (low.contains("снижение урона") || low.contains("получаемого урона")) return AffixType.DAMAGE_REDUCTION;
         if (low.contains("уклонен")) return AffixType.DODGE_CHANCE;
 
-        // 8. Бонус опыта % (`of Experience`) и Бонус золота % (`of Wealth`)
         if (low.contains("бонус опыт") || (low.contains("опыт") && hasPct) || low.startsWith("опыт")) {
             return AffixType.EXP_GAIN;
         }
@@ -904,7 +1144,6 @@ public class AffixPositionOptimizer {
             return AffixType.GOLD_GAIN;
         }
 
-        // 9. Здоровье за удар (`of Regeneration`), Здоровье за убийство (`of Vampirism`), Макс. здоровье (`of Ambulance`)
         if (headerSlot == SlotAffixAdvisor.GearSlot.BELT && low.contains("здоров")) {
             return AffixType.MAX_HEALTH;
         }
@@ -919,24 +1158,16 @@ public class AffixPositionOptimizer {
             return AffixType.MAX_HEALTH;
         }
 
-        // 10. Защита: на броне [П] `Доп. защита` (без %) и `Увеличенная защита %` (с %), на бижутерии [С] `Защита %`
-        if (low.contains("увеличенная защит")) {
-            return AffixType.LOCAL_PERCENT_DEFENSE;
-        }
-        if (low.contains("доп. защит") || low.contains("доп защит")) {
-            return AffixType.LOCAL_FLAT_DEFENSE;
-        }
+        if (low.contains("увеличенная защит")) return AffixType.LOCAL_PERCENT_DEFENSE;
+        if (low.contains("доп. защит") || low.contains("доп защит")) return AffixType.LOCAL_FLAT_DEFENSE;
         if (low.contains("защит")) {
             boolean isJewelry = (headerSlot == SlotAffixAdvisor.GearSlot.BELT
                     || headerSlot == SlotAffixAdvisor.GearSlot.AMULET
                     || headerSlot == SlotAffixAdvisor.GearSlot.RING);
-            if (isJewelry) {
-                return AffixType.DEFENSE_PERCENT;
-            }
+            if (isJewelry) return AffixType.DEFENSE_PERCENT;
             return hasPct ? AffixType.LOCAL_PERCENT_DEFENSE : AffixType.LOCAL_FLAT_DEFENSE;
         }
 
-        // 11. Доп. урон бижутерии (`of Striking`, `jewelry_flat_damage`: `+{value} к урону` / `Доп. урон +{value}`)
         if (low.contains("доп. урон") || low.contains("доп урон") || low.contains("дополнительный урон")
                 || low.contains("к урону") || low.contains("фикс. урон")) {
             return AffixType.ADDED_DAMAGE;
@@ -944,9 +1175,6 @@ public class AffixPositionOptimizer {
         return null;
     }
 
-    /**
-     * Распознаёт уровень позиционного Пробуждения (I..VIII -> +10%..+80%) по тексту и пиксельной подсветке значка.
-     */
     private static int[] detectAwakeningOnRow(IdleArcOcrEngine.OcrLine ol, String raw) {
         int stacks = 0;
         int pct = 0;
@@ -999,21 +1227,15 @@ public class AffixPositionOptimizer {
                 pct = 10;
             }
         }
-
         return new int[]{stacks, pct};
     }
 
     private static int parseRoman(String s) {
         if (s == null) return 0;
         String u = s.trim()
-                .replace('l', 'I')
-                .replace('1', 'I')
-                .replace('|', 'I')
-                .replace('!', 'I')
-                .replace('і', 'I')
-                .replace('І', 'I')
-                .replace('v', 'V')
-                .replace('x', 'X');
+                .replace('l', 'I').replace('1', 'I').replace('|', 'I')
+                .replace('!', 'I').replace('і', 'I').replace('І', 'I')
+                .replace('v', 'V').replace('x', 'X');
         switch (u) {
             case "I": return 1;
             case "II": return 2;
@@ -1029,7 +1251,9 @@ public class AffixPositionOptimizer {
 
     private static double extractPlusStatValue(String raw) {
         if (raw == null) return 0.0;
-        Matcher m = PLUS_STAT_PAT.matcher(raw);
+        String cleaned = raw.replaceAll("(?<=\\d)\\s+(?=[0-9.,])", "")
+                            .replaceAll("(?<=[.,])\\s+(?=\\d)", "");
+        Matcher m = PLUS_STAT_PAT.matcher(cleaned);
         if (m.find()) {
             String numStr = m.group(1).replace(" ", "").replace(',', '.');
             try {
@@ -1042,7 +1266,8 @@ public class AffixPositionOptimizer {
 
     private static List<Double> extractAllNumbers(String s) {
         List<Double> out = new ArrayList<>();
-        String cleaned = s.replaceAll("(?<=\\d)\\s+(?=\\d{3}\\b)", "");
+        String cleaned = s.replaceAll("(?<=\\d)\\s+(?=[0-9.,])", "")
+                          .replaceAll("(?<=[.,])\\s+(?=\\d)", "");
         Matcher m = NUMBER_PAT.matcher(cleaned);
         while (m.find()) {
             try {
@@ -1053,9 +1278,6 @@ public class AffixPositionOptimizer {
         return out;
     }
 
-    /**
-     * Строгое определение слота по математическим инвариантам `/api/config/game`, если шапка карточки скрыта скроллом.
-     */
     private static SlotAffixAdvisor.GearSlot inferSlotFromObservedAffixes(
             List<ParsedAffixRow> rows, List<String> plain) {
         StringBuilder all = new StringBuilder();
@@ -1067,525 +1289,54 @@ public class AffixPositionOptimizer {
             if (r.type == AffixType.ELEMENTAL_CONVERT) return SlotAffixAdvisor.GearSlot.WEAPON;
         }
 
-        boolean hasJewelryOnly = false;
-        boolean hasWeaponOrJewelry = false;
-        boolean hasArmorOnlyDef = false;
-        boolean hasDR = false;
-        boolean hasDodge = false;
-        boolean hasMaxHp = false;
-        boolean hasLoHOrLoK = false;
+        boolean hasJewelryOnly = false, hasWeaponOrJewelry = false, hasArmorOnlyDef = false;
+        boolean hasDR = false, hasDodge = false, hasMaxHp = false, hasLoHOrLoK = false;
 
         for (ParsedAffixRow r : rows) {
-            if (r.type == AffixType.ADDED_DAMAGE || r.type == AffixType.DEFENSE_PERCENT) {
-                hasJewelryOnly = true;
-            }
+            if (r.type == AffixType.ADDED_DAMAGE || r.type == AffixType.DEFENSE_PERCENT) hasJewelryOnly = true;
             if (r.type == AffixType.DOUBLE_HIT || r.type == AffixType.INTELLIGENCE
-                    || r.type == AffixType.DEXTERITY || r.type == AffixType.STRENGTH) {
-                hasWeaponOrJewelry = true;
-            }
-            if (r.type == AffixType.LOCAL_FLAT_DEFENSE || r.type == AffixType.LOCAL_PERCENT_DEFENSE) {
-                hasArmorOnlyDef = true;
-            }
+                    || r.type == AffixType.DEXTERITY || r.type == AffixType.STRENGTH) hasWeaponOrJewelry = true;
+            if (r.type == AffixType.LOCAL_FLAT_DEFENSE || r.type == AffixType.LOCAL_PERCENT_DEFENSE) hasArmorOnlyDef = true;
             if (r.type == AffixType.DAMAGE_REDUCTION) hasDR = true;
             if (r.type == AffixType.DODGE_CHANCE) hasDodge = true;
             if (r.type == AffixType.MAX_HEALTH) hasMaxHp = true;
             if (r.type == AffixType.LIFE_ON_HIT || r.type == AffixType.LIFE_ON_KILL) hasLoHOrLoK = true;
         }
 
-        if (hasJewelryOnly) {
-            return hasLoHOrLoK ? SlotAffixAdvisor.GearSlot.RING : SlotAffixAdvisor.GearSlot.AMULET;
-        }
-        if (hasArmorOnlyDef) {
-            return hasDR ? SlotAffixAdvisor.GearSlot.CHEST : SlotAffixAdvisor.GearSlot.GLOVES;
-        }
-        if (hasDR || hasDodge) {
-            if (hasMaxHp || full.contains("защита")) {
-                return SlotAffixAdvisor.GearSlot.CHEST;
-            }
-            return SlotAffixAdvisor.GearSlot.TORCH;
-        }
+        if (hasJewelryOnly) return hasLoHOrLoK ? SlotAffixAdvisor.GearSlot.RING : SlotAffixAdvisor.GearSlot.AMULET;
+        if (hasArmorOnlyDef) return hasDR ? SlotAffixAdvisor.GearSlot.CHEST : SlotAffixAdvisor.GearSlot.GLOVES;
+        if (hasDR || hasDodge) return (hasMaxHp || full.contains("защита")) ? SlotAffixAdvisor.GearSlot.CHEST : SlotAffixAdvisor.GearSlot.TORCH;
         if (hasWeaponOrJewelry) {
-            if (hasMaxHp) {
-                return hasLoHOrLoK ? SlotAffixAdvisor.GearSlot.AMULET : SlotAffixAdvisor.GearSlot.BELT;
-            }
+            if (hasMaxHp) return hasLoHOrLoK ? SlotAffixAdvisor.GearSlot.AMULET : SlotAffixAdvisor.GearSlot.BELT;
             return SlotAffixAdvisor.GearSlot.WEAPON;
         }
         return SlotAffixAdvisor.GearSlot.WEAPON;
     }
 
-    private static final Pattern HEADER_AWAKEN_ENH = Pattern.compile("\\bA([1-9])(?:\\s*\\+\\s*(\\d{1,3}))?\\b");
-    private static final Pattern HEADER_PLUS_ENH = Pattern.compile("(?:^|\\s)\\+(\\d{1,3})(?:\\s|$)");
-
-    static ItemRollModel calibrateRollModel(List<String> plainLines, List<ParsedAffixRow> rows) {
-        int itemAwaken = 0;
-        int enh = 0;
-        int hdrLim = Math.min(plainLines.size(), 8);
-        for (int i = 0; i < hdrLim; i++) {
-            String s = plainLines.get(i);
-            Matcher m = HEADER_AWAKEN_ENH.matcher(s);
-            if (m.find()) {
-                try {
-                    itemAwaken = Integer.parseInt(m.group(1));
-                    if (m.group(2) != null) enh = Integer.parseInt(m.group(2));
-                } catch (Exception ignored) {
-                }
-                break;
-            }
-        }
-        if (enh == 0) {
-            for (int i = 0; i < Math.min(plainLines.size(), 5); i++) {
-                Matcher mp = HEADER_PLUS_ENH.matcher(plainLines.get(i));
-                if (mp.find()) {
-                    try {
-                        enh = Integer.parseInt(mp.group(1));
-                    } catch (Exception ignored) {
-                    }
-                    break;
-                }
-            }
-        }
-
-        double priorUnitScale = 12.0;
-        if (itemAwaken > 0) {
-            double effEnh = enh <= 90 ? enh : (90.0 + 0.5 * (enh - 90.0));
-            priorUnitScale = 17.2 * (1.0 + 0.16 * itemAwaken) * (1.0 + 0.025 * effEnh);
-        }
-
-        double lowerBound = 0.0;
-        double upperBound = Double.POSITIVE_INFINITY;
-        double weightedSum = 0.0;
-        int uncappedCount = 0;
-
-        double observedProcCap = 0.0;
-        double observedBloodthirstCap = 0.0;
-
-        for (ParsedAffixRow r : rows) {
-            if (r.type == AffixType.EMPTY_POSITION || r.rolledValue <= 0.0) continue;
-            double unboosted = r.rolledValue / r.awakenMultiplier();
-
-            if (r.type.ignoresAffixCap && r.type.baseMin > 0.0 && r.type.baseMax > 0.0) {
-                double rowLo = unboosted / r.type.baseMax;
-                double rowHi = unboosted / r.type.baseMin;
-                if (rowLo > lowerBound) lowerBound = rowLo;
-                if (rowHi < upperBound) upperBound = rowHi;
-                weightedSum += unboosted / r.type.baseAvg;
-                uncappedCount++;
-            } else if (r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.DOUBLE_HIT) {
-                if (unboosted > observedProcCap) observedProcCap = unboosted;
-            } else if (r.type == AffixType.BLOODTHIRST) {
-                if (unboosted > observedBloodthirstCap) observedBloodthirstCap = unboosted;
-                if (itemAwaken == 0 && unboosted >= 16.0 && unboosted <= 25.0) {
-                    itemAwaken = (int) Math.round(unboosted - 15.0);
-                }
-            }
-        }
-
-        double unitScale;
-        if (uncappedCount > 0) {
-            double avgEst = weightedSum / uncappedCount;
-            if (itemAwaken > 0) {
-                avgEst = 0.55 * avgEst + 0.45 * priorUnitScale;
-            }
-            if (lowerBound <= upperBound * 1.03) {
-                double lo = Math.min(lowerBound, upperBound);
-                double hi = Math.max(lowerBound, upperBound);
-                unitScale = Math.max(lo, Math.min(hi, avgEst));
-            } else {
-                unitScale = Math.max(lowerBound * 0.95, avgEst);
-            }
-        } else if (observedProcCap > 0.0) {
-            unitScale = (observedProcCap >= 35.0)
-                    ? Math.max(priorUnitScale, (observedProcCap - 27.0) / 0.45)
-                    : (observedProcCap / 1.5);
-        } else {
-            unitScale = priorUnitScale;
-        }
-        unitScale = Math.max(1.5, Math.min(120.0, unitScale));
-
-        if (itemAwaken == 0 && unitScale >= 30.0) {
-            itemAwaken = (unitScale >= 46.0) ? 6 : 5;
-        }
-
-        double procCapBase;
-        if (observedProcCap > 0.0) {
-            procCapBase = observedProcCap;
-        } else if (unitScale >= 24.0) {
-            procCapBase = 26.5 + 0.47 * unitScale;
-        } else {
-            procCapBase = unitScale * 1.5;
-        }
-
-        double bloodthirstCap = observedBloodthirstCap > 0.0
-                ? observedBloodthirstCap
-                : (15.0 + Math.max(0, itemAwaken) * 1.0);
-
-        return new ItemRollModel(itemAwaken, enh, unitScale, procCapBase, bloodthirstCap);
-    }
-
-    static double evaluateAffixValue(
-            AffixType type,
-            double rolledVal,
-            SlotAffixAdvisor.GearSlot slot,
-            DruidProfile p) {
-        if (type == AffixType.EMPTY_POSITION || rolledVal <= 0.0) return 0.0;
-
-        boolean isFarm = (p.mode == DruidProfile.BuildMode.FARM);
-        double petPoolPct = estimateAdditivePetPoolPct(p);
-
-        switch (type) {
-            case PET_DAMAGE: {
-                double dpsGain = (rolledVal / (100.0 + petPoolPct)) * 100.0;
-                return isFarm ? dpsGain * 0.85 : dpsGain;
-            }
-            case DOUBLE_HIT: {
-                double dpsGain = rolledVal * p.marginalGainPer1PctDoubleHit();
-                return isFarm ? dpsGain * 0.80 : dpsGain;
-            }
-            case DOUBLE_DAMAGE: {
-                double dpsGain = rolledVal * p.marginalGainPer1PctDoubleDamage();
-                return isFarm ? dpsGain * 0.80 : dpsGain;
-            }
-            case CRIT_DAMAGE: {
-                double dpsGain = rolledVal * p.marginalGainPer1PctCrit();
-                return isFarm ? dpsGain * 0.78 : dpsGain;
-            }
-            case CRIT_CHANCE: {
-                double mult = (p.critChance < 100.0) ? 1.55 : 1.0;
-                double dpsGain = rolledVal * p.marginalGainPer1PctCrit() * mult;
-                return isFarm ? dpsGain * 0.78 : dpsGain;
-            }
-            case INTELLIGENCE: {
-                double ddFromInt = (rolledVal * 0.20) * p.marginalGainPer1PctDoubleDamage();
-                double petFromInt = ((rolledVal * 0.05) / (100.0 + petPoolPct)) * 100.0;
-                double totalDps = ddFromInt + petFromInt;
-                return isFarm ? totalDps * 0.78 : totalDps;
-            }
-            case DEXTERITY: {
-                double petGain = ((rolledVal * 0.10) / (100.0 + petPoolPct)) * 100.0;
-                double dodgeUtility = (p.dodgeRaw < 95.0) ? Math.min(2.0, rolledVal * 0.05 * 0.15) : 0.0;
-                return (petGain + dodgeUtility) * (isFarm ? 0.65 : 1.0);
-            }
-            case DAMAGE_REDUCTION: {
-                if (p.damageReductionRaw < 94.8) {
-                    double needed = Math.min(rolledVal, 95.0 - p.damageReductionRaw);
-                    return needed * 0.95 + Math.max(0.0, rolledVal - needed) * 0.08;
-                }
-                return 0.35;
-            }
-            case DODGE_CHANCE: {
-                if (p.dodgeRaw >= 95.0) {
-                    return 0.0;
-                }
-                return Math.min(rolledVal, 95.0 - p.dodgeRaw) * 0.45;
-            }
-            case BLOODTHIRST: {
-                return isFarm ? (0.8 + rolledVal * 0.04) : (1.55 + rolledVal * 0.04);
-            }
-            case MAX_HEALTH: {
-                double hpGainPct = (rolledVal / Math.max(2000.0, p.maxHp)) * 100.0;
-                double ehpScore = Math.min(2.4, 0.85 + hpGainPct * 0.06);
-                return isFarm ? ehpScore * 0.45 : ehpScore;
-            }
-            case LOCAL_PERCENT_DEFENSE:
-                return isFarm ? 0.25 : 0.70;
-            case DEFENSE_PERCENT:
-                return isFarm ? 0.25 : 0.65;
-            case LOCAL_FLAT_DEFENSE:
-                return isFarm ? 0.15 : 0.40;
-            case ADDED_DAMAGE:
-                return isFarm ? 0.35 : 0.80;
-            case GOLD_GAIN:
-                if (isFarm) {
-                    return 4.5 + (rolledVal / (100.0 + Math.max(0.0, p.goldBonus))) * 55.0;
-                }
-                return 0.18;
-            case EXP_GAIN:
-                if (isFarm || p.mode == DruidProfile.BuildMode.LEVELING) {
-                    return 4.2 + (rolledVal / (100.0 + Math.max(0.0, p.expBonus))) * 50.0;
-                }
-                return 0.15;
-            case LIFE_ON_HIT:
-            case LIFE_ON_KILL:
-                return isFarm ? 0.15 : 0.35;
-            case ELEMENTAL_CONVERT:
-                return 0.10;
-            case STRENGTH:
-            default:
-                return 0.12;
-        }
-    }
-
-    private static double estimateAdditivePetPoolPct(DruidProfile p) {
-        if (p.charLevel >= 280 || p.petDamageMultMillions >= 10.0) {
-            return 3500.0;
-        }
-        if (p.charLevel >= 150) {
-            return 1600.0;
-        }
-        return 550.0;
-    }
-
-    private static String buildDetailedPlan(
-            SlotAffixAdvisor.GearSlot slot,
-            boolean slotInferred,
-            boolean isShieldBase,
-            List<AffixType> compatiblePool,
-            List<ParsedAffixRow> rows,
-            List<AffixType> idealByPos,
-            Set<AffixType> idealSet,
-            Map<AffixType, Integer> optimalAwakenPctForStat,
-            ItemRollModel rollModel,
-            DruidProfile p,
-            double curSum,
-            double idealSum,
-            int keepCount,
-            int rerollCount,
-            int moveAwakenCount,
-            int awakenedRerollCount) {
-
-        String modeLabel = (p.mode == DruidProfile.BuildMode.FARM) ? "Фарм / Дроп"
-                : ((p.mode == DruidProfile.BuildMode.BOSS) ? "Боссы / Рейд" : "Бой / Питомец");
-
-        StringBuilder sb = new StringBuilder();
-        if (slotInferred) {
-            sb.append("⚠️ Шапка предмета не попала в кадр — слот оценён по статам как «")
-              .append(slot.slotTitle)
-              .append("». Нажми кнопку точного слота в полоске выше, чтобы пересчитать мгновенно!\n\n");
-        }
-        sb.append("🎯 ПЛАН ПО ПОЗИЦИЯМ (")
-          .append(isShieldBase ? "Щит / Вторая рука · пул 8 аффиксов" : slot.shortChip)
-          .append(" · режим: ").append(modeLabel).append("):\n");
-
-        int n = rows.size();
-        for (int i = 0; i < n; i++) {
-            ParsedAffixRow r = rows.get(i);
-            AffixType target = idealByPos.get(i);
-            String posHeader = "━━ Позиция #" + r.index + formatAwakenBadge(r) + " ━━\n";
-            sb.append("\n").append(posHeader);
-
-            double curGain = evaluateAffixValue(r.type, r.rolledValue, slot, p);
-            double targetAvgRoll = rollModel.expectedAvgRoll(target, r.awakenMultiplier());
-            double targetMaxRoll = rollModel.expectedMaxRoll(target, r.awakenMultiplier());
-            double targetGain = evaluateAffixValue(target, targetAvgRoll, slot, p);
-
-            if (r.type == AffixType.EMPTY_POSITION) {
-                sb.append("  Сейчас: ⬜ Пустая позиция (не открыта в Кузнице)\n");
-                sb.append("  ➕ ДОБАВИТЬ В КУЗНИЦЕ: «").append(target.taggedName())
-                  .append("» (ожид. ").append(formatRollRange(target, targetAvgRoll, targetMaxRoll))
-                  .append(" -> +").append(fmt1(targetGain)).append("% ценности)\n");
-                sb.append("  Почему: ").append(explainWhyTarget(target, targetAvgRoll, slot, p)).append("\n");
-                continue;
-            }
-
-            sb.append("  Сейчас: ").append(r.type.taggedName()).append(" (")
-              .append(formatStatRoll(r.type, r.rolledValue)).append(") — ")
-              .append(explainCurrentShort(r.type, r.rolledValue, curGain, p)).append("\n");
-
-            if (r.type == target) {
-                int optAwkPct = optimalAwakenPctForStat.containsKey(r.type)
-                        ? optimalAwakenPctForStat.get(r.type) : r.awakenBonusPct;
-                sb.append("  ✅ ОСТАВИТЬ СТАТ НА МЕСТЕ! Входит в топ-").append(n)
-                  .append(" реального пула слота");
-                if (r.awakenTier > 0 && optAwkPct <= r.awakenBonusPct) {
-                    sb.append(" и отлично использует Пробуждение ").append(roman(r.awakenTier))
-                      .append(" (+").append(r.awakenBonusPct).append("%)");
-                }
-                sb.append(".\n");
-                if (optAwkPct > r.awakenBonusPct) {
-                    sb.append("  💎 По Пробуждению: после замены лишних статов сюда выгодно перекинуть Пробуждение ")
-                      .append(roman(optAwkPct / 10)).append(" (+").append(optAwkPct)
-                      .append("%) через «Перераспределение пробуждения» в Кузнице!\n");
-                }
-
-                if (r.type.ignoresAffixCap && r.rolledValue > 0) {
-                    double minPossible = rollModel.expectedMinRoll(r.type, r.awakenMultiplier());
-                    double maxPossible = rollModel.expectedMaxRoll(r.type, r.awakenMultiplier());
-                    if (maxPossible > minPossible * 1.35 && r.rolledValue < 0.62 * maxPossible) {
-                        double extraFromRerollVal = evaluateAffixValue(r.type, 0.85 * maxPossible, slot, p) - curGain;
-                        sb.append("  💡 Подсказка по числу: сам тип стата правильный, но выпал НИЗКИЙ ролл значения (")
-                          .append(formatStatRoll(r.type, r.rolledValue)).append(" из возможных ~")
-                          .append(formatStatRoll(r.type, minPossible)).append("..").append(formatStatRoll(r.type, maxPossible))
-                          .append(" на этом предмете — докрутка числа даст ещё ~+")
-                          .append(fmt1(Math.max(0.3, extraFromRerollVal))).append("% DPS!).\n");
-                    }
-                }
-            } else {
-                double delta = Math.max(0.0, targetGain - Math.max(0.0, curGain));
-                if (r.awakenTier > 0) {
-                    sb.append("  🔒 [ПОЗИЦИЯ ПРОБУЖДЕНА ").append(roman(r.awakenTier))
-                      .append(" — ЗАБЛОКИРОВАНА ОТ ПРЯМОЙ ЗАМЕНЫ!] ");
-                } else {
-                    sb.append("  🔄 ");
-                }
-                sb.append("ВМЕСТО НЕГО ПОСТАВИТЬ: «").append(target.taggedName()).append("» (ожид. ")
-                  .append(formatRollRange(target, targetAvgRoll, targetMaxRoll)).append(")\n");
-                sb.append("  📈 Выгода замены: +").append(fmt1(delta)).append("% к эффективности (")
-                  .append(explainWhyTarget(target, targetAvgRoll, slot, p)).append(").\n");
-                if (target == AffixType.CRIT_CHANCE && compatiblePool.contains(AffixType.INTELLIGENCE)
-                        && !idealSet.contains(AffixType.INTELLIGENCE)) {
-                    double intAvg = rollModel.expectedAvgRoll(AffixType.INTELLIGENCE, r.awakenMultiplier());
-                    double intMax = rollModel.expectedMaxRoll(AffixType.INTELLIGENCE, r.awakenMultiplier());
-                    sb.append("  ✨ Отличная альтернатива в этом же пуле: «[С] Интеллект» (")
-                      .append(formatRollRange(AffixType.INTELLIGENCE, intAvg, intMax))
-                      .append(" без капа -> даёт до +").append(fmt1(intMax * 0.20))
-                      .append("% Дв.урона и +").append(fmt1(intMax * 0.05)).append("% Пета) — оставляй то, что прокнет первым!\n");
-                }
-                if (r.awakenTier > 0) {
-                    int freePos = findFirstUnawakenedRerollPos(rows, idealSet);
-                    if (freePos > 0) {
-                        sb.append("  ⚒️ Как заменить в Кузнице: в IdleArc пробуждённый слот ").append(roman(r.awakenTier))
-                          .append(" защищён замком. Сначала перекинь Пробуждение «Перераспределением» (либо сразу лови «")
-                          .append(target.taggedName()).append("» на свободной Позиции #").append(freePos)
-                          .append(", а потом перенеси на неё Пробуждение ").append(roman(r.awakenTier)).append("!).\n");
-                    } else {
-                        sb.append("  ⚒️ Как заменить в Кузнице: пробуждённый слот ").append(roman(r.awakenTier))
-                          .append(" защищён от случайного реролла — сначала сними/перераспредели Пробуждение с Позиции #")
-                          .append(r.index).append(", замени стат на «").append(target.taggedName())
-                          .append("» и верни Пробуждение.\n");
-                    }
-                }
-            }
-        }
-
-        sb.append("\n📊 ИТОГО ПО ПРЕДМЕТУ:\n");
-        sb.append("• Сейчас работает на билд: ").append(fmt1(curSum))
-          .append("% экв. ценности -> После доводки: ").append(fmt1(idealSum))
-          .append("% (+").append(fmt1(Math.max(0.0, idealSum - curSum))).append("% прироста).\n");
-
-        if (rerollCount > 0 || moveAwakenCount > 0) {
-            sb.append("• Рекомендуемый порядок в Кузнице: ");
-            List<String> steps = new ArrayList<>();
-            List<String> freeToRoll = new ArrayList<>();
-            List<String> lockedAwakenedToRoll = new ArrayList<>();
-            for (int i = 0; i < n; i++) {
-                ParsedAffixRow row = rows.get(i);
-                if (row.type != idealByPos.get(i) && !idealSet.contains(row.type)) {
-                    String item = "#" + row.index + " («" + row.type.ruName + "» -> «" + idealByPos.get(i).taggedName() + "»)";
-                    if (row.awakenTier > 0) {
-                        lockedAwakenedToRoll.add(item + " [" + roman(row.awakenTier) + "]");
-                    } else {
-                        freeToRoll.add(item);
-                    }
-                }
-            }
-            if (!freeToRoll.isEmpty()) {
-                steps.add("сразу перекуй свободные непробуждённые позиции " + joinSimple(freeToRoll));
-            }
-            if (!lockedAwakenedToRoll.isEmpty()) {
-                steps.add("для пробуждённых позиций " + joinSimple(lockedAwakenedToRoll)
-                        + " сначала сними замок «Перераспределением пробуждения» в Кузнице (в игре пробуждённый аффикс заблокирован от прямой замены)");
-            }
-            if (hasAnyAwakening(rows)) {
-                steps.add("поставь максимальное Пробуждение на «" + idealByPos.get(findBestAwakenIdx(rows)).taggedName() + "»");
-            }
-            sb.append(joinSteps(steps)).append(".\n");
-        } else {
-            sb.append("• Ничего перековывать по типам аффиксов не требуется — все позиции собраны по BiS-канону слота!\n");
-        }
-
-        sb.append("\n📚 Верифицированный пул слота в игре (").append(formatPoolSummary(slot, isShieldBase, compatiblePool)).append(")");
-
-        return sb.toString();
-    }
-
-    private static String formatPoolSummary(SlotAffixAdvisor.GearSlot slot, boolean isShieldBase, List<AffixType> pool) {
+    private static String formatPoolSummary(SlotAffixAdvisor.GearSlot slot, List<AffixType> pool) {
         List<String> prefixes = new ArrayList<>();
         List<String> suffixes = new ArrayList<>();
         for (AffixType t : pool) {
             if (t.kind == AffixKind.PREFIX) {
-                if (t == AffixType.ELEMENTAL_CONVERT) {
-                    prefixes.add("6× Конверсия стихий %");
-                } else {
-                    prefixes.add(t.ruName + (t.isPercent ? " %" : ""));
-                }
+                prefixes.add(t == AffixType.ELEMENTAL_CONVERT ? "6× Конверсия стихий %" : (t.ruName + (t.isPercent ? " %" : "")));
             } else if (t.kind == AffixKind.SUFFIX) {
                 suffixes.add(t.ruName + (t.isPercent ? " %" : ""));
             }
         }
         int officialCount = (slot == SlotAffixAdvisor.GearSlot.WEAPON) ? (pool.size() + 5) : pool.size();
-        return officialCount + " аффиксов — [П] Префиксы: " + joinSimple(prefixes)
-                + " · [С] Суффиксы: " + joinSimple(suffixes);
+        return officialCount + " аффиксов — [П]: " + joinSimple(prefixes) + " · [С]: " + joinSimple(suffixes);
     }
 
     private static int findFirstUnawakenedRerollPos(List<ParsedAffixRow> rows, Set<AffixType> idealSet) {
         for (ParsedAffixRow r : rows) {
-            if (r.awakenTier == 0 && !idealSet.contains(r.type)) {
-                return r.index;
-            }
+            if (r.awakenTier == 0 && !idealSet.contains(r.type)) return r.index;
         }
         return -1;
     }
 
-    private static String explainCurrentShort(AffixType t, double val, double gain, DruidProfile p) {
-        switch (t) {
-            case DODGE_CHANCE:
-                if (p.dodgeRaw >= 95.0) {
-                    return "🚫 0.0% пользы (уклонение уже " + fmt1(p.dodgeRaw) + "% при жёстком капе 95%!)";
-                }
-                return "защита уклонением (+" + fmt1(gain) + "%)";
-            case ELEMENTAL_CONVERT:
-                return "⚠️ меняет стихию только удара героя, НЕ действует на питомца (~0% DPS пета)";
-            case STRENGTH:
-                return "🚫 непрофильный стат Воина (+физ. урон/возмездие, почти 0% DPS пету)";
-            case DEXTERITY:
-                if (p.dodgeRaw >= 95.0) {
-                    return "⚠️ даёт лишь +" + fmt1(val * 0.10) + "% к пулу пета (~+" + fmt1(gain)
-                            + "% DPS), а уклонение сгорает в капе 95% (Интеллект в ~6× сильнее!)";
-                }
-                return "полу-стат (~+" + fmt1(gain) + "% DPS)";
-            case GOLD_GAIN:
-            case EXP_GAIN:
-                if (p.mode != DruidProfile.BuildMode.FARM && p.mode != DruidProfile.BuildMode.LEVELING) {
-                    return "фарм-стат (0% боевого урона в пуше/боссах)";
-                }
-                return "фарм-бонус (+" + fmt1(gain) + "% ценности фарма)";
-            case DAMAGE_REDUCTION:
-                if (p.damageReductionRaw >= 95.0) {
-                    return "кап Снижения урона 95% уже закрыт (" + fmt1(p.damageReductionRaw) + "%)";
-                }
-                return "держит кап выживаемости 95% (+" + fmt1(gain) + "%)";
-            case BLOODTHIRST:
-                return "эксклюзив Факела: множит весь отхил за удар и за убийство (кап 15%+1%×A)";
-            default:
-                return "даёт ~+" + fmt1(gain) + "% к эффективности билда";
-        }
-    }
-
-    private static String explainWhyTarget(AffixType target, double expRoll, SlotAffixAdvisor.GearSlot slot, DruidProfile p) {
-        switch (target) {
-            case PET_DAMAGE:
-                return "главный префикс Друида БЕЗ аффикс-капа — разгоняет урон активного питомца сильнее любого другого стата";
-            case DOUBLE_HIT:
-                return "топ боевой суффикс оружия/бижутерии: каждые 100% дают гарантированный доп. удар";
-            case DOUBLE_DAMAGE:
-                return "официально умножает урон И героя, И питомца (при " + fmt0(p.doubleDamageChance) + "% даёт отличный чистый множитель)";
-            case INTELLIGENCE:
-                return "БЕЗ аффикс-капа! Даёт +" + fmt1(expRoll * 0.20) + "% Шанса двойного урона (и герою, и пету!) + "
-                        + fmt1(expRoll * 0.05) + "% Урона пета";
-            case CRIT_DAMAGE:
-                return "официально игнорирует аффикс-кап предмета и напрямую множит криты";
-            case CRIT_CHANCE:
-                return (p.critChance >= 100.0)
-                        ? "игнорирует аффикс-кап, а весь шанс выше 100% конвертируется 1:1 в Крит. урон!"
-                        : "поднимает шанс крита до 100%+ и далее идёт 1:1 в Крит. урон";
-            case BLOODTHIRST:
-                return "уникальный суффикс ТОЛЬКО Факела (5-й лучший боевой стат слота после 4 атакующих аффиксов пула Факела)";
-            case DAMAGE_REDUCTION:
-                return "нужен для удержания порога 95% Снижения урона";
-            case MAX_HEALTH:
-                return "лучший защитный префикс брони после закрытия 4 атакующих статов пула (PetDmg, Дв. урон, Крит. урон, Шанс крита)";
-            case GOLD_GAIN:
-                return "ускоряет прокачку ячеек снаряжения, гнёзд самоцветов и надписей за золото";
-            case EXP_GAIN:
-                return "ускоряет набор уровней героя в фарм-пресете";
-            default:
-                return "лучший доступный аффикс из официального пула слота «" + slot.shortChip + "»";
-        }
-    }
-
     private static String formatAwakenBadge(ParsedAffixRow r) {
         if (r.awakenTier <= 0) return "";
-        return " [💎 ПРОБУЖДЕНИЕ " + roman(r.awakenTier) + " · +" + r.awakenBonusPct + "%]";
+        return " [💎 " + roman(r.awakenTier) + " · ×" + fmt2(r.awakenMultiplier()) + "]";
     }
 
     private static String roman(int tier) {
@@ -1604,44 +1355,14 @@ public class AffixPositionOptimizer {
 
     private static String formatStatRoll(AffixType t, double val) {
         if (val <= 0.0) return "—";
-        if (t.isPercent) {
-            return "+" + fmt1(val) + "%";
-        }
-        return "+" + Math.round(val);
+        return t.isPercent ? ("+" + fmt1(val) + "%") : ("+" + Math.round(val));
     }
 
-    private static String formatRollRange(AffixType t, double avgVal, double maxVal) {
-        if (avgVal <= 0.0) return "—";
-        if (!t.ignoresAffixCap || Math.abs(maxVal - avgVal) < 2.0) {
-            return "~" + formatStatRoll(t, avgVal);
+    private static String formatRollBand(AffixType t, double minV, double avgV, double maxV) {
+        if (!t.ignoresAffixCap || Math.abs(maxV - minV) < 2.0) {
+            return "(" + formatStatRoll(t, avgV) + ")";
         }
-        return "~" + formatStatRoll(t, avgVal) + " (макс. до " + formatStatRoll(t, maxVal) + ")";
-    }
-
-    private static int findFirstPositionFor(List<AffixType> list, AffixType target) {
-        for (int i = 0; i < list.size(); i++) {
-            if (list.get(i) == target) return i;
-        }
-        return 0;
-    }
-
-    private static boolean hasAnyAwakening(List<ParsedAffixRow> rows) {
-        for (ParsedAffixRow r : rows) {
-            if (r.awakenTier > 0) return true;
-        }
-        return false;
-    }
-
-    private static int findBestAwakenIdx(List<ParsedAffixRow> rows) {
-        int bestIdx = 0;
-        int bestBonus = -1;
-        for (int i = 0; i < rows.size(); i++) {
-            if (rows.get(i).awakenBonusPct > bestBonus) {
-                bestBonus = rows.get(i).awakenBonusPct;
-                bestIdx = i;
-            }
-        }
-        return bestIdx;
+        return "(~" + formatStatRoll(t, avgV) + ", диап. " + formatStatRoll(t, minV) + ".." + formatStatRoll(t, maxV) + ")";
     }
 
     private static String joinSimple(List<String> items) {
@@ -1653,17 +1374,12 @@ public class AffixPositionOptimizer {
         return sb.toString();
     }
 
-    private static String joinSteps(List<String> steps) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < steps.size(); i++) {
-            if (i > 0) sb.append("; затем ");
-            sb.append((i + 1)).append(") ").append(steps.get(i));
-        }
-        return sb.toString();
-    }
-
     private static String fmt1(double v) {
         return String.format(Locale.US, "%.1f", v);
+    }
+
+    private static String fmt2(double v) {
+        return String.format(Locale.US, "%.2f", v);
     }
 
     private static String fmt0(double v) {

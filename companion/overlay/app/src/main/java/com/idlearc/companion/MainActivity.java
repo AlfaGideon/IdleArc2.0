@@ -21,9 +21,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * Главный экран приложения IdleArc Druid Helper.
- * Позволяет в 2 клика выдать разрешение «Поверх других окон» и запустить плавающий сканер экрана поверх IdleArc,
- * а также посмотреть полный аудит Друида [UND] AlfaGideon (Ур. 324) и гайд 1 -> Кап.
+ * Главный экран приложения IdleArc Druid Helper v2.0.0.
+ * Чистый визуальный OCR-сканер и реляционный математический симулятор снаряжения Друида
+ * без предзаполненных статов или захардкоженных списков замен.
  */
 public class MainActivity extends Activity {
 
@@ -32,6 +32,10 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIF = 5003;
 
     private TextView permStatusTv;
+    private TextView auditBodyTv;
+    private TextView inscBodyTv;
+    private TextView slotDetailBodyTv;
+    private SlotAffixAdvisor.GearSlot activeMainSlot = SlotAffixAdvisor.GearSlot.WEAPON;
     private DruidProfile profile;
 
     @Override
@@ -53,6 +57,19 @@ public class MainActivity extends Activity {
         super.onResume();
         profile = DruidProfile.load(this);
         updatePermissionBanner();
+        refreshDynamicCards();
+    }
+
+    private void refreshDynamicCards() {
+        if (auditBodyTv != null) {
+            auditBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
+        }
+        if (inscBodyTv != null) {
+            inscBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
+        }
+        if (slotDetailBodyTv != null && activeMainSlot != null) {
+            slotDetailBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(activeMainSlot, profile));
+        }
     }
 
     private void buildMainScreen() {
@@ -65,14 +82,14 @@ public class MainActivity extends Activity {
 
         // Заголовок
         TextView headerTitle = new TextView(this);
-        headerTitle.setText("🌿 IdleArc Druid Helper v1.6.0");
+        headerTitle.setText("🌿 IdleArc Druid Helper v2.0.0");
         headerTitle.setTextColor(0xFF34D399);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         root.addView(headerTitle);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Плавающий сканер + Подбор аффиксов и ★ Перерождения под каждый слот · Офлайн OCR RU/EN");
+        subtitle.setText("Визуальный OCR-сканер + живой математический расчёт аффиксов по отношению к текущим статам · 0% хардкода");
         subtitle.setTextColor(0xFF9CA3AF);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         subtitle.setPadding(0, dp(4), 0, dp(14));
@@ -158,6 +175,7 @@ public class MainActivity extends Activity {
         slotDetailTv.setTextColor(0xFFF3F4F6);
         slotDetailTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
         slotDetailTv.setLineSpacing(dp(2), 1.08f);
+        slotDetailBodyTv = slotDetailTv;
 
         final SlotAffixAdvisor.GearSlot[] allGearSlots = SlotAffixAdvisor.GearSlot.values();
         final TextView[] mainSlotChips = new TextView[allGearSlots.length];
@@ -174,6 +192,7 @@ public class MainActivity extends Activity {
             if (i > 0) clp.leftMargin = dp(6);
             chip.setLayoutParams(clp);
             chip.setOnClickListener(v -> {
+                activeMainSlot = gs;
                 for (int j = 0; j < allGearSlots.length; j++) {
                     boolean sel = (j == idx);
                     GradientDrawable gd = new GradientDrawable();
@@ -195,19 +214,35 @@ public class MainActivity extends Activity {
         mainSlotChips[0].performClick();
         root.addView(slotCard);
 
-        // Карточка аудита текущего билда [UND] AlfaGideon
+        // Карточка живого математического аудита отсканированного героя
         LinearLayout auditCard = makeCard(0xFF181625, 0xFFFBBF24);
         LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         acLp.topMargin = dp(14);
         auditCard.setLayoutParams(acLp);
 
-        TextView auditBody = new TextView(this);
-        auditBody.setText(DruidKnowledgeBase.buildAuditReport(profile));
-        auditBody.setTextColor(0xFFF3F4F6);
-        auditBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        auditBody.setLineSpacing(dp(2), 1.08f);
-        auditCard.addView(auditBody);
+        auditBodyTv = new TextView(this);
+        auditBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
+        auditBodyTv.setTextColor(0xFFF3F4F6);
+        auditBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        auditBodyTv.setLineSpacing(dp(2), 1.08f);
+        auditCard.addView(auditBodyTv);
+
+        TextView resetProfileBtn = makeBigButton(
+                "🗑️ Сбросить сохранённый скан характеристик",
+                0xFF2D2844, 0xFFFCD34D);
+        LinearLayout.LayoutParams rpLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rpLp.topMargin = dp(10);
+        resetProfileBtn.setLayoutParams(rpLp);
+        resetProfileBtn.setOnClickListener(v -> {
+            profile.resetStats(MainActivity.this);
+            refreshDynamicCards();
+            Toast.makeText(MainActivity.this,
+                    "Сохранённый скан сброшен. Открой «Характеристики персонажа» в игре и нажми СКАН.",
+                    Toast.LENGTH_SHORT).show();
+        });
+        auditCard.addView(resetProfileBtn);
         root.addView(auditCard);
 
         // Карточка Автонадписей и Питомцев
@@ -217,12 +252,12 @@ public class MainActivity extends Activity {
         icLp.topMargin = dp(14);
         inscCard.setLayoutParams(icLp);
 
-        TextView inscBody = new TextView(this);
-        inscBody.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
-        inscBody.setTextColor(0xFFE5E7EB);
-        inscBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.3f);
-        inscBody.setLineSpacing(dp(2), 1.08f);
-        inscCard.addView(inscBody);
+        inscBodyTv = new TextView(this);
+        inscBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
+        inscBodyTv.setTextColor(0xFFE5E7EB);
+        inscBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.3f);
+        inscBodyTv.setLineSpacing(dp(2), 1.08f);
+        inscCard.addView(inscBodyTv);
         root.addView(inscCard);
 
         // Карточка полного гайда 1 -> Кап + все 18 навыков

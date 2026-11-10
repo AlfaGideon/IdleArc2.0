@@ -154,7 +154,7 @@ def build_apk() -> Path:
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        final_apk = OUT_DIR / "IdleArc-DruidHelper-v1.6.0.apk"
+        final_apk = OUT_DIR / "IdleArc-DruidHelper-v2.0.0.apk"
         subprocess.check_call([
             java, "-jar", apksigner_jar, "sign",
             "--ks", str(keystore),

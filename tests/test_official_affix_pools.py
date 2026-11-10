@@ -32,10 +32,12 @@ class TestOfficialAffixPools(unittest.TestCase):
             (tmp / "android" / "content" / "SharedPreferences.java").write_text(
                 "package android.content;\n"
                 "public interface SharedPreferences {\n"
+                "  boolean getBoolean(String k, boolean d);\n"
                 "  int getInt(String k, int d); float getFloat(String k, float d);\n"
                 "  long getLong(String k, long d); String getString(String k, String d);\n"
                 "  Editor edit();\n"
                 "  interface Editor {\n"
+                "    Editor putBoolean(String k, boolean v);\n"
                 "    Editor putInt(String k, int v); Editor putFloat(String k, float v);\n"
                 "    Editor putLong(String k, long v); Editor putString(String k, String v);\n"
                 "    void apply();\n"
@@ -126,6 +128,7 @@ public class MatrixCheck {
                 str(tmp / "android" / "content" / "SharedPreferences.java"),
                 str(SRC_DIR / "IdleArcOcrEngine.java"),
                 str(SRC_DIR / "DruidProfile.java"),
+                str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "DruidKnowledgeBase.java"),
                 str(SRC_DIR / "SlotAffixAdvisor.java"),
                 str(SRC_DIR / "AffixPositionOptimizer.java"),

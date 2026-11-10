@@ -63,6 +63,7 @@ public class OverlayService extends Service {
 
     private TextView pillStatusTv;
     private TextView pillAutoBtn;
+    private TextView headerTitleTv;
     private TextView cardHeadlineTv;
     private TextView cardSubTypeTv;
     private TextView cardBodyTv;
@@ -302,15 +303,15 @@ public class OverlayService extends Service {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView titleTv = new TextView(this);
-        titleTv.setText("🌿 Druid Helper · Ур." + profile.charLevel);
-        titleTv.setTextColor(0xFF34D399);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        headerTitleTv = new TextView(this);
+        headerTitleTv.setText("🌿 Druid Helper v2.0");
+        headerTitleTv.setTextColor(0xFF34D399);
+        headerTitleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        headerTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        titleTv.setLayoutParams(titleLp);
+        headerTitleTv.setLayoutParams(titleLp);
         attachDragOnly(header);
-        attachDragOnly(titleTv);
+        attachDragOnly(headerTitleTv);
 
         TextView scanNowBtn = makeButton("🔍 СКАН", 0xFF059669, 0xFFFFFFFF, 11.5f);
         scanNowBtn.setOnClickListener(v -> {
@@ -339,7 +340,7 @@ public class OverlayService extends Service {
         closeBtn.setLayoutParams(clLp);
         closeBtn.setOnClickListener(v -> stopSelf());
 
-        header.addView(titleTv);
+        header.addView(headerTitleTv);
         header.addView(scanNowBtn);
         header.addView(autoToggleBtn);
         header.addView(minBtn);
@@ -618,6 +619,12 @@ public class OverlayService extends Service {
     private void refreshUiContent() {
         if (rootContainer == null) return;
 
+        if (headerTitleTv != null) {
+            headerTitleTv.setText(profile.hasScannedStats
+                    ? ("🌿 Druid Helper v2.0 · Скан: " + profile.scannedStatsCount + " стат.")
+                    : "🌿 Druid Helper v2.0 · Live OCR");
+        }
+
         pillAutoBtn.setText(autoScanEnabled ? "⚡ВКЛ" : "⚡");
         pillAutoBtn.setBackground(roundRect(autoScanEnabled ? 0xFF065F46 : 0xFF2B283A,
                 autoScanEnabled ? 0xFF34D399 : 0xFF4B5563, dp(1), dp(14)));
@@ -684,18 +691,18 @@ public class OverlayService extends Service {
             cardHeadlineTv.setBackground(roundRect(0xFF3B1F5E, 0xFFC084FC, dp(1), dp(10)));
             cardBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(selectedSlot, profile));
         } else if (activeTab == 2) {
-            cardSubTypeTv.setText("Живой профиль Друида (обновляется сканом «Характеристик»)");
-            cardHeadlineTv.setText("📊 Персональный разбор статов и капов");
+            cardSubTypeTv.setText("Живой профиль героя (обновляется кнопкой СКАН в «Характеристиках»)");
+            cardHeadlineTv.setText("📊 Динамический математический разбор статов и капов");
             cardHeadlineTv.setBackground(roundRect(0xFF064E3B, 0xFF34D399, dp(1), dp(10)));
             cardBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
         } else if (activeTab == 3) {
-            cardSubTypeTv.setText("Талисманы +9 · Команда из 4 питомцев · Пресеты");
-            cardHeadlineTv.setText("✒️ Приоритеты Автонадписей и Петов");
+            cardSubTypeTv.setText("Расчёт ценности Автонадписей и механика отряда из 4 питомцев");
+            cardHeadlineTv.setText("✒️ Живой приоритет Автонадписей и Петов");
             cardHeadlineTv.setBackground(roundRect(0xFF3B2F63, 0xFFA78BFA, dp(1), dp(10)));
             cardBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
         } else {
-            cardSubTypeTv.setText("От старта 1 ур. до эндгейма 324+ (Хатка / Туннели / Симбиоз)");
-            cardHeadlineTv.setText("🗺️ Дорожная карта прокачки Друида 1 → Кап");
+            cardSubTypeTv.setText("Справочник механик прогрессии класса Друид");
+            cardHeadlineTv.setText("🗺️ Прогрессия Друида по этапам игры");
             cardHeadlineTv.setBackground(roundRect(0xFF4A3512, 0xFFFBBF24, dp(1), dp(10)));
             cardBodyTv.setText(DruidKnowledgeBase.buildFullLevelingGuide());
         }

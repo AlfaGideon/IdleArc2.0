@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper APK в 1 клик."""
+"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.0.0 APK в 1 клик."""
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v1.6.0.apk"
+APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.0.0.apk"
 
 
 def get_meta():
@@ -29,7 +29,7 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v1.6.0.apk"')
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.0.apk"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -48,18 +48,18 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IdleArc Druid Helper APK</title>
+  <title>IdleArc Druid Helper v2.0.0 APK</title>
   <style>
     body {{
       margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #12101b; color: #f3f4f6; display: flex; justify-content: center; padding: 24px 16px;
     }}
     .card {{
-      max-width: 520px; width: 100%; background: #1b1829; border: 1.5px solid #34d399;
+      max-width: 540px; width: 100%; background: #1b1829; border: 1.5px solid #34d399;
       border-radius: 18px; padding: 22px; box-shadow: 0 12px 32px rgba(0,0,0,0.45);
     }}
     h1 {{ margin: 0 0 6px; font-size: 22px; color: #34d399; }}
-    .sub {{ color: #9ca3af; font-size: 13px; margin-bottom: 18px; }}
+    .sub {{ color: #9ca3af; font-size: 13px; margin-bottom: 18px; line-height: 1.45; }}
     .btn {{
       display: block; text-align: center; background: #059669; color: #fff; text-decoration: none;
       font-weight: 700; font-size: 16px; padding: 15px 18px; border-radius: 12px;
@@ -75,19 +75,19 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <div class="card">
-    <h1>🌿 IdleArc Druid Helper v1.6.0</h1>
-    <div class="sub">100% верифицировано по серверному конфигу игры (/api/config/game) и libapp.so: точные пулы всех 26 аффиксов по каждому слоту (Факел=9, Шлем/Броня=11, Перчатки/Сапоги=10, Пояс=13, Амулет/Кольцо=15, Оружие=18), пометки [П]/[С], формулы Интеллекта/Крита и детектор низких роллов</div>
-    <a class="btn" href="download/IdleArc-DruidHelper-v1.6.0.apk" download="IdleArc-DruidHelper-v1.6.0.apk">
-      📲 СКАЧАТЬ APK v1.6.0 ({kb:.1f} КБ)
+    <h1>🌿 IdleArc Druid Helper v2.0.0</h1>
+    <div class="sub">Чистый визуальный OCR-сканер + реляционный математический симулятор (0% захардкоженных статов или предзаданных пар замен): вычисляет лучший параметр строго по отношению к текущим характеристикам персонажа и самого предмета</div>
+    <a class="btn" href="download/IdleArc-DruidHelper-v2.0.0.apk" download="IdleArc-DruidHelper-v2.0.0.apk">
+      📲 СКАЧАТЬ APK v2.0.0 ({kb:.1f} КБ)
     </a>
     <div class="meta">
-      <b>Пакет:</b> com.idlearc.companion (minSdk 24 / targetSdk 34)<br>
+      <b>Пакет:</b> com.idlearc.companion · versionCode 200 (minSdk 24 / targetSdk 34)<br>
       <b>SHA-256:</b> {sha}
     </div>
     <ul>
-      <li><b>Плавающая таблетка «🌿 ДРУИД | 🔍 СКАН | ⚡»</b> поверх IdleArc — двигается пальцем, не перехватывает клики игры.</li>
-      <li><b>Офлайн RU/EN OCR (проверен на всех 23 твоих скриншотах):</b> считывает шмот, сравнение предметов, выбор из 3 надписей талисмана, все 18 скиллов Друида и «Характеристики персонажа».</li>
-      <li><b>Предзагружен твой профиль [UND] AlfaGideon (Ур. 324 · GS 3497):</b> сразу видит оверкап уклонения 131.7% &gt; 95%, считает точную прибавку DPS от Двойного удара vs Крита и отсеивает статы-ловушки (+% Урон атаки).</li>
+      <li><b>Никакого хардкода статов или готовых ответов:</b> профиль на старте чистый — открой «Характеристики персонажа» и нажми 🔍 СКАН, чтобы приложение считало твои реальные числа с экрана.</li>
+      <li><b>Честный относительный расчёт (LiveBuildSimulator):</b> для надетого предмета («Снять») вычитает стат проверяемой строки из профиля и прогоняет полный комбинаторный перебор C(|пул|, k) всех допустимых аффиксов слота по формулам игры.</li>
+      <li><b>Прозрачная математика на каждой позиции:</b> выводит точные % ΔDPS / % ΔEHP / % ΔФарм и живой топ-3 свободных кандидатов с чистым выигрышем относительно текущего ролла.</li>
     </ul>
   </div>
 </body>

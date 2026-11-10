@@ -7,16 +7,18 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Анализатор игрового экрана IdleArc:
- * определяет открытое окно (Сравнение шмота, Предмет/Талисман, Выбор надписи из 3,
- * Характеристики персонажа, Навык Друида, Дерево навыков, Снаряжение) и выдаёт точный вердикт.
+ * Визуальный анализатор экрана IdleArc 1.3.15 (0% захардкоженных статов или предзаданных ответов).
+ *
+ * Распознаёт открытое окно игры (Характеристики персонажа, Карточка предмета/Кузницы,
+ * Сравнение двух предметов, Выбор Автонадписи из 3, Навык Друида, Дерево навыков)
+ * и передаёт считанные с экрана числа в математический симулятор LiveBuildSimulator.
  */
 public class ScreenAnalyzer {
 
     public enum VerdictColor {
-        GOOD,    // Изумрудный (надевать / отлично)
-        WARN,    // Золотой (внимание / оверкап / инфо)
-        BAD      // Красный (хуже надетого / мусор / ловушка)
+        GOOD,
+        WARN,
+        BAD
     }
 
     public static class ScanResult {
@@ -32,24 +34,26 @@ public class ScreenAnalyzer {
         public List<IdleArcOcrEngine.OcrLine> ocrLines = new ArrayList<>();
     }
 
-    private static final Pattern PAREN_PCT = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)%\\s*\\(\\s*([0-9]+(?:[.,][0-9]+)?)");
+    private static final Pattern PAREN_PCT = Pattern.compile(
+            "([0-9]+(?:[.,][0-9]+)?)%\\s*\\(\\s*([0-9]+(?:[.,][0-9]+)?)");
+    private static final Pattern CHAR_LEVEL_PAT = Pattern.compile(
+            "(?:уровень|ур\\.?)\\s*:?\\s*([0-9]{1,4})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static ScanResult analyzeFrame(IdleArcOcrEngine ocr, int[] argb, int w, int h, DruidProfile profile) {
         ScanResult res = new ScanResult();
+        if (profile == null) profile = new DruidProfile();
         if (ocr == null || argb == null || w < 100 || h < 100) {
             res.headline = "Нет кадра для анализа";
             res.color = VerdictColor.WARN;
             return res;
         }
 
-        // Сканируем центральную игровую область (без системного статус-бара и нижней навигации Android)
         int rx0 = (int) (w * 0.05);
         int rx1 = (int) (w * 0.95);
         int ry0 = (int) (h * 0.08);
         int ry1 = (int) (h * 0.90);
 
         List<IdleArcOcrEngine.OcrLine> rawMetaLines = ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1);
-        // Отсекаем затемнённый фоновый экран (<= 135 яркости) над и под открытым модальным окном предмета/скилла
         List<IdleArcOcrEngine.OcrLine> metaLines = IdleArcOcrEngine.isolateActiveModalLines(rawMetaLines);
         List<String> lines = new ArrayList<>(metaLines.size());
         for (IdleArcOcrEngine.OcrLine ml : metaLines) {
@@ -63,26 +67,29 @@ public class ScreenAnalyzer {
         String joined = joinedSb.toString();
         String lowAll = DruidKnowledgeBase.normalizeForMatch(joined);
 
-        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА» (не путать с карточкой предмета, где одновременно выпали Двойной удар и Уклонение!)
+        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА»
         boolean hasItemModalMarkers = lowAll.contains("аффикс") || lowAll.contains("надеть")
-                || lowAll.contains("гнезд") || lowAll.contains("гнёзд") || lowAll.contains("переков")
-                || lowAll.contains("разобрать") || lowAll.contains("пробужд");
+                || lowAll.contains("снять") || lowAll.contains("гнезд") || lowAll.contains("гнёзд")
+                || lowAll.contains("переков") || lowAll.contains("разобрать") || lowAll.contains("пробужд");
         boolean isCharStatsSheet = lowAll.contains("характеристики персонажа")
                 || (!hasItemModalMarkers && lowAll.contains("шанс блока") && lowAll.contains("возмезд"))
-                || (!hasItemModalMarkers && lowAll.contains("множитель добычи") && lowAll.contains("рубин"));
+                || (!hasItemModalMarkers && lowAll.contains("множитель добычи") && lowAll.contains("рубин"))
+                || (!hasItemModalMarkers && lowAll.contains("итоговый множитель") && lowAll.contains("питомц"));
         if (isCharStatsSheet) {
             res.screenType = "Характеристики персонажа";
             int updatedCount = updateProfileFromStatsLines(lines, profile);
             res.profileUpdated = (updatedCount > 0);
-            res.shortBadge = String.format(Locale.US, "📊 Профиль обновлён (%d стат.)", updatedCount);
+            res.shortBadge = String.format(Locale.US, "📊 Скан статов (%d шт.)", updatedCount);
 
-            if (profile.wastedDodgePct() > 1.5) {
+            if (profile.wastedDodgePct() > 1.0) {
                 res.color = VerdictColor.WARN;
                 res.headline = String.format(Locale.US,
-                        "⚠️ Сняты живые статы! Оверкап уклонения: +%.1f%% впустую", profile.wastedDodgePct());
+                        "⚠️ Считано %d статов! Уклонение выше капа 95%% (+%.1f%% впустую)",
+                        updatedCount, profile.wastedDodgePct());
             } else {
                 res.color = VerdictColor.GOOD;
-                res.headline = "✅ Живые характеристики Друида сохранены в профиль!";
+                res.headline = String.format(Locale.US,
+                        "✅ Считано с экрана %d статов и сохранено в живой профиль!", updatedCount);
             }
             res.details = DruidKnowledgeBase.buildAuditReport(profile);
             return res;
@@ -93,7 +100,7 @@ public class ScreenAnalyzer {
             return analyzeInscriptionChoices(ocr, argb, w, h, lines, profile);
         }
 
-        // 3. ВКЛАДКА ДЕРЕВА КЛАССОВЫХ НАВЫКОВ (Хатка / Туннели / Симбиоз) — проверяем до одиночного попапа скилла
+        // 3. ВКЛАДКА ДЕРЕВА КЛАССОВЫХ НАВЫКОВ (Хатка / Туннели / Симбиоз)
         if ((lowAll.contains("хатка") || lowAll.contains("туннели") || lowAll.contains("симбиоз") || lowAll.contains("пассивное дерево"))
                 && !lowAll.contains("закрыть") && (lowAll.contains("макс") || lowAll.contains("вложить"))) {
             res.screenType = "Дерево классовых навыков";
@@ -101,56 +108,66 @@ public class ScreenAnalyzer {
             res.shortBadge = "🌳 Навыки Друида";
             res.color = VerdictColor.GOOD;
             if (maxCount >= 2) {
-                res.headline = "✅ Ветка прокачана на МАКС! Что качать дальше:";
-                res.details = "• На твоём уровне все 18 классовых навыков уже закрыты на МАКС — респекать очки за 25 Arcstone НЕ НУЖНО!\n"
-                        + "• Теперь твой главный рычаг в навыках — аффикс «+Все классовые навыки» на питомцах и экипировке:\n"
-                        + "  каждый +1 ранг одновременно апает 10 безлимитных скиллов Друида (Погрыз +8% пета, Одна душа +12% пета, Хранитель хатки +1 мастерство, Землекоп +2% мат/+1% шмот, Общий инстинкт +10% крит урон)!\n"
-                        + "• Не забудь проверить вкладку «Пассивное дерево» под пресеты (Набор 1 — Пуш/Босс, Набор 2 — Фарм).";
+                res.headline = "✅ Открытая ветка навыков замаксена";
+                res.details = "• Все видимые узлы ветки прокачаны до максимума базовых очков.\n"
+                        + "• Дальнейший рост навыков без потолка (Погрыз +8%/ур, Одна душа +12%/ур, Хранитель хатки, Землекоп, Общий инстинкт) идёт через бонус «+Все классовые навыки» на факеле и питомцах.\n"
+                        + "• Нажми на конкретный узел навыка и нажми 🔍 СКАН, чтобы проверить его точный кап «ЛИМИТ» с учётом твоего текущего бонуса ко всем навыкам.";
             } else {
-                res.headline = "🌱 Прокачка классовых навыков Друида:";
-                res.details = "Качай строго в таком порядке:\n"
-                        + "1) Хатка: Погрыз -> Строитель плотин -> Удар хвостом + Хранитель хатки\n"
-                        + "2) Туннели: Землекоп + Чуткий нюх -> Подкоп (казнь 35% HP!)\n"
-                        + "3) Симбиоз: Родство + Общий инстинкт -> Одна душа (+12%/ур пета!)\n"
-                        + "💡 Если уже есть +15..+20 ко всем навыкам, в скиллах с плашкой ЛИМИТ оставляй по 1 очку!";
+                res.headline = "🌱 Прокачка классовых навыков Друида";
+                res.details = "Базовый порядок раскрытия синергий:\n"
+                        + "1) Хатка: Погрыз → Строитель плотин → Удар хвостом (лимит 20 эфф. ур.) + Хранитель хатки\n"
+                        + "2) Туннели: Землекоп + Чуткий нюх → Подкоп (казнь при HP <= 35%, лимит 18 эфф. ур.)\n"
+                        + "3) Симбиоз: Родство + Общий инстинкт → Одна душа (+12%/ур пета)\n"
+                        + "💡 Пока очков навыков не хватает на все 18 узлов, проверяй плашку ЛИМИТ: с высоким бонусом «+Все классовые навыки» лимитные навыки достигают капа уже с 1 вложенного очка!";
             }
             return res;
         }
 
-        // 4. КАРТОЧКА КОНКРЕТНОГО НАВЫКА ДРУИДА (модальное окно с «Ранг: ...» и «Закрыть»)
+        // 4. КАРТОЧКА КОНКРЕТНОГО НАВЫКА ДРУИДА
         DruidKnowledgeBase.SkillInfo skill = DruidKnowledgeBase.findSkillByText(joined);
         if (skill != null && (lowAll.contains("ранг") || lowAll.contains("за уровень") || lowAll.contains("закр"))) {
             res.screenType = "Навык Друида";
             boolean overLimit = lowAll.contains("лимит") || lowAll.contains("макс.");
             int bonusAll = detectBonusAllSkills(lines, profile.bonusAllClassSkills);
-            if (bonusAll > 0) profile.bonusAllClassSkills = bonusAll;
+            if (bonusAll > 0 && bonusAll != profile.bonusAllClassSkills) {
+                profile.bonusAllClassSkills = bonusAll;
+                res.profileUpdated = true;
+            }
 
             res.shortBadge = "🌿 " + skill.ruName + (skill.hasHardCap ? " [ЛИМИТ]" : " [БЕЗ КАПА]");
             res.color = skill.hasHardCap ? VerdictColor.WARN : VerdictColor.GOOD;
             res.headline = "Навык «" + skill.ruName + "» (" + skill.branch + " · Ранг " + skill.tierRank + ")";
             StringBuilder d = new StringBuilder();
-            d.append("• Эффект: ").append(skill.formulaRu).append("\n");
-            d.append("• Механика капа: ").append(skill.capNoteRu).append("\n");
-            d.append("• Приоритет прокачки с 1 ур.: #").append(skill.levelingPriority).append(" из 18\n");
-            if (skill.hasHardCap && profile.bonusAllClassSkills >= skill.effectiveCapLevels - 1) {
-                d.append("💡 У тебя +").append(profile.bonusAllClassSkills)
-                 .append(" от Всех классовых навыков: навык уже выше потолка (")
-                 .append(skill.effectiveCapLevels).append(" эфф. ур.) даже с 1 очком! На 324 ур. очков хватает на все 18/18, но на твинке/сезоне держи тут 1 очко.");
+            d.append("• Формула игры: ").append(skill.formulaRu).append("\n");
+            d.append("• Механика лимита: ").append(skill.capNoteRu).append("\n");
+            if (skill.hasHardCap && profile.bonusAllClassSkills > 0) {
+                int effWith1Pt = 1 + profile.bonusAllClassSkills;
+                if (effWith1Pt >= skill.effectiveCapLevels) {
+                    d.append("💡 Расчёт по твоему бонусу +").append(profile.bonusAllClassSkills)
+                     .append(" ко всем навыкам: уже с 1 вложенным очком эффективный уровень равен ")
+                     .append(effWith1Pt).append(" (потолок навыка: ").append(skill.effectiveCapLevels)
+                     .append("). Дополнительные базовые очки сверх 1 не увеличат эффект, если очков в дереве не хватает!");
+                } else {
+                    int neededPts = Math.max(1, skill.effectiveCapLevels - profile.bonusAllClassSkills);
+                    d.append("💡 Расчёт по твоему бонусу +").append(profile.bonusAllClassSkills)
+                     .append(" ко всем навыкам: для закрытия потолка (").append(skill.effectiveCapLevels)
+                     .append(" эфф. ур.) достаточно вложить ").append(neededPts).append(" очк.");
+                }
             } else if (overLimit) {
-                d.append("ℹ️ Навык достиг жёсткого потолка (ЛИМИТ) — дальнейший рост +Всех навыков усиливает соседние безлимитные скиллы.");
-            } else {
-                d.append("🔥 Этот навык НЕ имеет потолка — каждый +1 к «Всем классовым навыкам» на петах/шмоте продолжает его разгонять!");
+                d.append("ℹ️ На карточке зафиксировано достижение потолка (ЛИМИТ).");
+            } else if (!skill.hasHardCap) {
+                d.append("🔥 Навык не ограничен потолком: каждый +1 к «Всем классовым навыкам» продолжает линейно увеличивать его бонус.");
             }
             res.details = d.toString();
             return res;
         }
 
-        // 5. СРАВНЕНИЕ ДВУХ ПРЕДМЕТОВ (Надето vs Новый / левая и правая или верхняя и нижняя карточки)
+        // 5. СРАВНЕНИЕ ДВУХ ПРЕДМЕТОВ
         if (isItemComparisonScreen(lowAll)) {
             return analyzeItemComparison(ocr, argb, w, h, profile);
         }
 
-        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / ПОЗИЦИЙ АФФИКСОВ КУЗНИЦЫ (ИНТЕЛЛЕКТУАЛЬНЫЙ ПОДБОР ПО МЕСТАМ #1..#5)
+        // 6. ОДИНОЧНАЯ КАРТОЧКА ПРЕДМЕТА / КУЗНИЦЫ (ЖИВОЙ МАТЕМАТИЧЕСКИЙ РАСЧЁТ ПОЗИЦИЙ #1..#5)
         boolean hasOpenItemCardMarkers = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines) >= 0
                 || lowAll.contains("надеть") || lowAll.contains("снять") || lowAll.contains("разобрать")
                 || lowAll.contains("бонус добычи") || lowAll.contains("перераспредел")
@@ -161,9 +178,6 @@ public class ScreenAnalyzer {
                 ? null
                 : SlotAffixAdvisor.detectSlotFromModalLines(metaLines);
 
-        // Запасной прицельный проход OCR прямо по верхней шапке всплывающей карточки (где ВСЕГДА написано название/слот):
-        // пробуем и под компактную иконку (x = 22%..84%, чтобы не обрезать короткие слова «Факел» / «Пояс» / «Шлем»!),
-        // и под крупную иконку (x = 34%..84%).
         if (detectedSlot == null && !equipGridNoModal && (hasOpenItemCardMarkers || isSingleItemPopup(lowAll))) {
             int hdrBottomY = (int) (h * 0.55);
             int affIdx = AffixPositionOptimizer.findAffixHeaderIndexFromStrings(lines);
@@ -186,7 +200,7 @@ public class ScreenAnalyzer {
                 res.isAffixItemScan = true;
                 res.detectedSlot = opt.slotInferredFromAffixes ? null : opt.slot;
                 String titleChip = opt.slotInferredFromAffixes ? "📦 Предмет (выбери слот выше)" : opt.slot.shortChip;
-                res.screenType = titleChip + " · По-позиционный подбор (" + profile.mode.title + ")";
+                res.screenType = titleChip + " · Математический разбор (" + profile.mode.title + ")";
                 res.shortBadge = opt.shortBadge;
                 res.headline = opt.headline;
                 res.color = opt.verdictColor;
@@ -200,27 +214,28 @@ public class ScreenAnalyzer {
             DruidKnowledgeBase.ItemEvaluation ev = DruidKnowledgeBase.evaluateItemLines(lines, profile);
             String slotLabel = detectedSlot != null ? detectedSlot.shortChip : "Предмет";
             res.screenType = slotLabel + " (" + profile.mode.title + ")";
-            res.shortBadge = slotLabel + ": " + ev.tierGrade;
-            res.color = ev.totalScore >= 52 ? VerdictColor.GOOD
-                      : (ev.totalScore >= 25 ? VerdictColor.WARN : VerdictColor.BAD);
-            res.headline = slotLabel + " — " + ev.tierGrade;
-            res.details = formatItemEvalDetails(ev, profile);
+            res.shortBadge = String.format(Locale.US, "%s: +%.2f%%", slotLabel, ev.totalScore);
+            res.color = ev.totalScore >= 6.0 ? VerdictColor.GOOD
+                      : (ev.totalScore >= 2.0 ? VerdictColor.WARN : VerdictColor.BAD);
+            res.headline = String.format(Locale.US, "%s — расчётный вклад +%.2f%% [%s]",
+                    slotLabel, ev.totalScore, ev.tierGrade);
+            res.details = formatItemEvalDetails(ev);
             return res;
         }
 
-        // 7. ЭКРАН ЭКИПИРОВКИ («Снаряжение» / «Кодекс» / «Автонадписи»)
-        if (lowAll.contains("кодекс") || lowAll.contains("автонадписи") || (lowAll.contains("снаряжение") && lowAll.contains("кузница"))) {
+        // 7. ЭКРАН ЭКИПИРОВКИ (общая кукла без открытой карточки предмета)
+        if (lowAll.contains("кодекс") || lowAll.contains("автонадписи")
+                || (lowAll.contains("снаряжение") && lowAll.contains("кузница"))) {
             int greenArrows = countGreenUpgradeBadges(argb, w, h);
-            res.screenType = "Сетка снаряжения";
-            res.shortBadge = "⚔️ Шмот · " + greenArrows + " апгрейдов";
+            res.screenType = "Окно снаряжения";
+            res.shortBadge = "⚔️ Шмот · ~" + greenArrows + " апгрейдов";
             res.color = VerdictColor.GOOD;
-            res.headline = "⚔️ Снаряжение Друида (доступно улучшений ячеек: ~" + greenArrows + ")";
-            res.details = "🎯 ПРИОРИТЕТ ПРОКАЧКИ ЯЧЕЕК ЗА ЗОЛОТО/МАТЕРИАЛЫ:\n"
-                    + "1. Двуручный посох (у тебя A6 +30 ★5 — держи всегда максимальным: его плоская база через «Родство» даёт 75% в базу питомца!).\n"
-                    + "2. Кольца, Амулет и Перчатки (поднимай с A5 +5 -> A6 ради атакующих проков и дропа).\n"
-                    + "3. Факел (вторая рука), Шлем, Броня, Пояс и Сапоги.\n"
-                    + "4. Оба Талисмана (+9) держи равного уровня жертв и крути Автонадписи (Двойной удар / Урон пета / Доп. убийство).\n"
-                    + "💡 Нажми на любой выпавший предмет, чтобы открыть его статы, и нажми «СКАН» — я скажу, надевать его или разбирать!";
+            res.headline = "⚔️ Окно снаряжения (зелёных индикаторов улучшения ячеек: ~" + greenArrows + ")";
+            res.details = "📷 Как запустить точный расчёт любого предмета:\n"
+                    + "1. Сперва открой «Характеристики персонажа» и нажми 🔍 СКАН — компаньон считает твои текущие криты, проки, уклонение и снижение урона.\n"
+                    + "2. Нажми на любой надетый или выпавший предмет, чтобы открылись его строки аффиксов, и снова нажми 🔍 СКАН.\n"
+                    + "3. Симулятор вычтет текущий стат строки из твоего профиля и математически сравнит все доступные аффиксы этого слота!\n\n"
+                    + "⚙️ Общее правило механики Друида: прокачка ячейки оружия увеличивает плоскую базу атаки, до 75% которой передаётся в базу питомцев через «Родство» и «Дикую связь».";
             return res;
         }
 
@@ -228,14 +243,17 @@ public class ScreenAnalyzer {
         res.screenType = "Обзор / Бой";
         res.color = VerdictColor.GOOD;
         res.shortBadge = "🌿 Готов (" + profile.mode.title + ")";
-        res.headline = "🌿 Открой предмет, надпись, навык или Характеристики";
+        res.headline = "🌿 Открой «Характеристики персонажа», предмет, сравнение или навык";
         StringBuilder preview = new StringBuilder();
-        preview.append("Текущий режим оценки: ").append(profile.mode.title).append("\n")
-               .append("• Открой карточку выпавшего предмета / сравнения — подскажу, надевать или ломать.\n")
-               .append("• Открой «Характеристики персонажа» и нажми СКАН — обновлю твои живые статы.\n")
-               .append("• Включи «⚡ АВТО», чтобы виджет сам ловил новые окна при открытии!\n");
+        preview.append("Режим целевой функции: ").append(profile.mode.title).append("\n")
+               .append("• Источник статов героя: ")
+               .append(profile.hasScannedStats
+                       ? ("живой скан (" + profile.scannedStatsCount + " параметров)")
+                       : "ещё не отсканирован (открой «Характеристики персонажа» и нажми СКАН)")
+               .append("\n")
+               .append("• Открой любую карточку предмета / сравнения / Автонадписи и нажми 🔍 СКАН для расчёта.\n");
         if (!lines.isEmpty()) {
-            preview.append("\nРаспознано на экране (").append(lines.size()).append(" стр.):\n");
+            preview.append("\nВизуально считано с экрана (").append(lines.size()).append(" стр.):\n");
             for (int i = 0; i < Math.min(5, lines.size()); i++) {
                 preview.append("  · ").append(lines.get(i)).append("\n");
             }
@@ -250,7 +268,7 @@ public class ScreenAnalyzer {
                 AffixPositionOptimizer.analyzeItemAffixes(res.ocrLines, slotOverride, profile);
         if (opt != null) {
             res.detectedSlot = opt.slot;
-            res.screenType = opt.slot.shortChip + " · По-позиционный подбор (" + profile.mode.title + ")";
+            res.screenType = opt.slot.shortChip + " · Математический разбор (" + profile.mode.title + ")";
             res.shortBadge = opt.shortBadge;
             res.headline = opt.headline;
             res.color = opt.verdictColor;
@@ -260,7 +278,7 @@ public class ScreenAnalyzer {
 
     private static ScanResult analyzeItemComparison(IdleArcOcrEngine ocr, int[] argb, int w, int h, DruidProfile profile) {
         ScanResult res = new ScanResult();
-        res.screenType = "Сравнение предметов";
+        res.screenType = "Сравнение двух предметов";
 
         List<IdleArcOcrEngine.OcrLine> topMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.05), (int) (h * 0.10), (int) (w * 0.95), (int) (h * 0.49));
         List<IdleArcOcrEngine.OcrLine> botMeta = ocr.recognizeLinesWithMeta(argb, w, h, (int) (w * 0.05), (int) (h * 0.49), (int) (w * 0.95), (int) (h * 0.88));
@@ -289,34 +307,38 @@ public class ScreenAnalyzer {
         if (candSlot == null) candSlot = SlotAffixAdvisor.detectSlotFromModalLines(eqMeta);
         res.detectedSlot = candSlot;
 
-        String eqLabel = useHorizontal ? "Левый (текущий)" : "Верхний (текущий)";
+        String eqLabel = useHorizontal ? "Левый (надетый)" : "Верхний (надетый)";
         String candLabel = useHorizontal ? "Правый (новый)" : "Нижний (новый)";
 
-        double diff = candidate.totalScore - equipped.totalScore;
-        if (diff >= 4.0) {
+        double netDeltaPct = candidate.totalScore - equipped.totalScore;
+        if (netDeltaPct >= 0.8) {
             res.color = VerdictColor.GOOD;
-            res.shortBadge = String.format(Locale.US, "✅ НАДЕВАЙ (+%.0f очк.)", diff);
-            res.headline = "✅ " + candLabel + " ЛУЧШЕ под Друида (" + profile.mode.title + ")!";
-        } else if (diff <= -4.0) {
+            res.shortBadge = String.format(Locale.US, "✅ НАДЕВАЙ (+%.2f%%)", netDeltaPct);
+            res.headline = String.format(Locale.US, "✅ %s сильнее на +%.2f%% (%s)",
+                    candLabel, netDeltaPct, profile.mode.title);
+        } else if (netDeltaPct <= -0.8) {
             res.color = VerdictColor.BAD;
-            res.shortBadge = "❌ ОСТАВЬ ТЕКУЩИЙ";
-            res.headline = "❌ " + candLabel + " СЛАБЕЕ — оставляй " + eqLabel;
+            res.shortBadge = String.format(Locale.US, "❌ ОСТАВЬ ТЕКУЩИЙ (%.2f%%)", netDeltaPct);
+            res.headline = String.format(Locale.US, "❌ %s уступает %.2f%% текущему предмету",
+                    candLabel, Math.abs(netDeltaPct));
         } else {
             res.color = VerdictColor.WARN;
-            res.shortBadge = "⚖️ ПОЧТИ РАВНЫ";
-            res.headline = "⚖️ Предметы близки по силе — смотри по-строчный разбор ниже";
+            res.shortBadge = String.format(Locale.US, "⚖️ РАВНЫ (%+.2f%%)", netDeltaPct);
+            res.headline = String.format(Locale.US, "⚖️ Разница в пределах %.2f%% — смотри разбор аффиксов ниже",
+                    Math.abs(netDeltaPct));
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n", eqLabel, equipped.totalScore, equipped.tierGrade));
-        sb.append(String.format(Locale.US, "• %s: %.0f балл. [%s]\n\n", candLabel, candidate.totalScore, candidate.tierGrade));
+        sb.append(String.format(Locale.US, "• %s: вклад +%.2f%% [%s]\n", eqLabel, equipped.totalScore, equipped.tierGrade));
+        sb.append(String.format(Locale.US, "• %s: вклад +%.2f%% [%s]\n", candLabel, candidate.totalScore, candidate.tierGrade));
+        sb.append(String.format(Locale.US, "• Чистая относительная разница: %+.2f%%\n\n", netDeltaPct));
 
         AffixPositionOptimizer.OptimizationReport candOpt =
                 AffixPositionOptimizer.analyzeItemAffixes(candMeta, candSlot, profile);
         if (candOpt != null) {
             sb.append(candOpt.details);
         } else {
-            sb.append(formatItemEvalDetails(candidate, profile));
+            sb.append(formatItemEvalDetails(candidate));
         }
         res.details = sb.toString();
         return res;
@@ -333,7 +355,6 @@ public class ScreenAnalyzer {
         ScanResult res = new ScanResult();
         res.screenType = "Выбор надписи талисмана";
 
-        // Делим центральную модалку на 3 полосы предложений по вертикали
         List<String> opt1 = ocr.recognizeRegion(argb, w, h, (int) (w * 0.08), (int) (h * 0.28), (int) (w * 0.92), (int) (h * 0.44));
         List<String> opt2 = ocr.recognizeRegion(argb, w, h, (int) (w * 0.08), (int) (h * 0.44), (int) (w * 0.92), (int) (h * 0.60));
         List<String> opt3 = ocr.recognizeRegion(argb, w, h, (int) (w * 0.08), (int) (h * 0.60), (int) (w * 0.92), (int) (h * 0.76));
@@ -347,34 +368,40 @@ public class ScreenAnalyzer {
         if (e2.totalScore > bestScore) { bestScore = e2.totalScore; bestIdx = 2; }
         if (e3.totalScore > bestScore) { bestScore = e3.totalScore; bestIdx = 3; }
 
-        if (bestScore >= 15.0) {
+        if (bestScore >= 1.5) {
             res.color = VerdictColor.GOOD;
-            res.shortBadge = "✒️ БЕРИ ВАРИАНТ #" + bestIdx;
-            res.headline = "✒️ Лучшая надпись: ВАРИАНТ #" + bestIdx + " (" + String.format(Locale.US, "%.0f балл.", bestScore) + ")";
+            res.shortBadge = String.format(Locale.US, "✒️ ВАРИАНТ #%d (+%.2f%%)", bestIdx, bestScore);
+            res.headline = String.format(Locale.US, "✒️ Лучший расчётный вариант: #%d (+%.2f%% к сборке)", bestIdx, bestScore);
         } else {
             res.color = VerdictColor.WARN;
             res.shortBadge = "🔄 ПЕРЕБРОСЬ НАДПИСЬ";
-            res.headline = "🔄 Все 3 надписи слабые под Друида — лучше перебросить!";
+            res.headline = "🔄 Все 3 варианта дают слабый прирост относительно твоих статов — выгоднее перебросить";
         }
         res.details = String.format(Locale.US,
-                "Оценка под режим «%s»:\n• Вариант #1: %.0f балл. (%s)\n• Вариант #2: %.0f балл. (%s)\n• Вариант #3: %.0f балл. (%s)\n\nТоп-цели: Все классовые навыки, Урон питомца, Двойной удар, Двойной урон, Доп. убийство.",
-                profile.mode.title, e1.totalScore, e1.tierGrade, e2.totalScore, e2.tierGrade, e3.totalScore, e3.tierGrade);
+                "Математическое сравнение 3 вариантов («%s»):\n"
+              + "• Вариант #1: +%.2f%% (%s)\n"
+              + "• Вариант #2: +%.2f%% (%s)\n"
+              + "• Вариант #3: +%.2f%% (%s)",
+                profile.mode.title,
+                e1.totalScore, e1.tierGrade,
+                e2.totalScore, e2.tierGrade,
+                e3.totalScore, e3.tierGrade);
         return res;
     }
 
-    private static String formatItemEvalDetails(DruidKnowledgeBase.ItemEvaluation ev, DruidProfile p) {
+    private static String formatItemEvalDetails(DruidKnowledgeBase.ItemEvaluation ev) {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format(Locale.US, "Итоговый рейтинг Друида: %.0f балл. -> %s\n", ev.totalScore, ev.tierGrade));
+        sb.append(String.format(Locale.US, "Расчётный суммарный вклад: +%.2f%% → %s\n", ev.totalScore, ev.tierGrade));
         if (!ev.pros.isEmpty()) {
-            sb.append("\nПолезные статы:\n");
+            sb.append("\nПолезные параметры (по отношению к текущим статам):\n");
             for (String pro : ev.pros) sb.append("  ").append(pro).append("\n");
         }
         if (!ev.traps.isEmpty()) {
-            sb.append("\nЛовушки / под переброс:\n");
+            sb.append("\nСлабые / неэффективные параметры:\n");
             for (String tr : ev.traps) sb.append("  ").append(tr).append("\n");
         }
         if (ev.pros.isEmpty() && ev.traps.isEmpty()) {
-            sb.append("\nПодсказка: нажми и удерживай предмет, чтобы открылись все его вторичные характеристики, и нажми СКАН.");
+            sb.append("\nПодсказка: открой карточку предмета так, чтобы были видны его строки характеристик, и нажми 🔍 СКАН.");
         }
         return sb.toString().trim();
     }
@@ -384,77 +411,126 @@ public class ScreenAnalyzer {
         return equipWords >= 2 || (low.contains("надеть") && low.contains("продать")) || (low.contains("надеть") && low.contains("разобрать"));
     }
 
-    private static void recomputeGrade(DruidKnowledgeBase.ItemEvaluation ev) {
-        if (ev.totalScore >= 85) ev.tierGrade = "S+ (ИДЕАЛ)";
-        else if (ev.totalScore >= 52) ev.tierGrade = "S / A (ОТЛИЧНО)";
-        else if (ev.totalScore >= 25) ev.tierGrade = "B (СРЕДНЕ)";
-        else if (ev.totalScore >= 5) ev.tierGrade = "C (ПРОХОДНОЙ)";
-        else ev.tierGrade = "D (В РАЗБОР)";
-    }
-
     private static boolean isSingleItemPopup(String low) {
-        return low.contains("надеть") || low.contains("переков") || low.contains("трансмутац")
+        return low.contains("надеть") || low.contains("снять") || low.contains("переков") || low.contains("трансмутац")
                 || low.contains("пробужд") || low.contains("перераспредел") || low.contains("смена типа")
                 || low.contains("позиции аффиксов") || low.contains("талисман") || low.contains("аффикс")
                 || low.contains("очки снаряжения") || low.contains("урон питомц")
                 || low.contains("двойного удара") || low.contains("все классовые навыки");
     }
 
-    private static int updateProfileFromStatsLines(List<String> lines, DruidProfile p) {
+    /**
+     * Полный визуальный парсер окна «Характеристики персонажа» (все 26+ боевых, защитных и фарм-статов).
+     */
+    static int updateProfileFromStatsLines(List<String> lines, DruidProfile p) {
         int updated = 0;
         for (String raw : lines) {
             String low = DruidKnowledgeBase.normalizeForMatch(raw);
+
+            // Уровень персонажа
+            Matcher lvlM = CHAR_LEVEL_PAT.matcher(low);
+            if (lvlM.find()) {
+                try {
+                    int lv = Integer.parseInt(lvlM.group(1));
+                    if (lv >= 1 && lv <= 999) {
+                        p.charLevel = lv;
+                        updated++;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
             double v = DruidKnowledgeBase.extractFirstNumber(raw);
             if (v <= 0 && !low.contains("шанс блока")) continue;
 
             if (low.contains("очки снаряжения") || low.contains("gs")) {
-                if (v >= 50 && v <= 500000) { p.gearScore = (int) v; updated++; }
+                if (v >= 10 && v <= 999999) { p.gearScore = (int) Math.round(v); updated++; }
             } else if (low.contains("снижение урона")) {
                 parseEffAndRawPct(raw, v, true, p);
                 updated++;
-            } else if (low.startsWith("сила")) {
+            } else if (low.contains("уклонен")) {
+                parseEffAndRawPct(raw, v, false, p);
+                updated++;
+            } else if (low.startsWith("сила") && !low.contains("талисман")) {
                 p.strength = v; updated++;
             } else if (low.contains("ловкост")) {
                 p.agility = v; updated++;
             } else if (low.contains("интеллект")) {
                 p.intelligence = v; updated++;
-            } else if (low.contains("шанс крит")) {
+            } else if ((low.contains("макс. здоров") || low.contains("макс здоров") || low.startsWith("здоровье"))
+                    && !low.contains("за удар") && !low.contains("за убийств") && !raw.contains("%")) {
+                p.maxHp = v; updated++;
+            } else if (low.contains("урон атаки") && !raw.contains("%")) {
+                double avgAtk = DruidKnowledgeBase.extractRangeAverage(raw);
+                if (avgAtk > 0) { p.minAtk = avgAtk; p.maxAtk = avgAtk; updated++; }
+            } else if (low.startsWith("защита") && !raw.contains("%")) {
+                p.defense = v; updated++;
+            } else if (low.contains("шанс крит") || low.contains("крит. удара")) {
                 p.critChance = v; updated++;
-            } else if (low.contains("крит. урон") || low.contains("крит урон")) {
+            } else if (low.contains("крит. урон") || low.contains("крит урон") || low.contains("критический урон")) {
                 p.critDamage = v; updated++;
-            } else if (low.contains("двойного удара")) {
+            } else if (low.contains("двойного удара") || low.contains("двойной удар")) {
                 p.doubleHitChance = v; updated++;
-            } else if (low.contains("двойного урона")) {
+            } else if (low.contains("двойного урона") || low.contains("двойной урон")) {
                 p.doubleDamageChance = v; updated++;
-            } else if (low.contains("уклонен")) {
-                parseEffAndRawPct(raw, v, false, p);
-                updated++;
-            } else if (low.contains("урон боссам")) {
+            } else if (low.contains("урон боссам") || low.contains("по боссам")) {
                 p.bossDamage = v; updated++;
-            } else if (low.contains("урон питомца")) {
-                // В строке ×83.48M число уже умножено на 1e6 -> переведём обратно в миллионы
-                p.petDamageMultMillions = v >= 10000.0 ? (v / 1000000.0) : v;
+            } else if (low.contains("итоговый множитель")) {
+                if (low.contains("добыч") || low.contains("предмет")) { p.itemDropMult = v; updated++; }
+                else if (low.contains("материал")) { p.matDropMult = v; updated++; }
+                else if (low.contains("рубин")) { p.rubyDropMult = v; updated++; }
+                else if (low.contains("рун")) { p.runeDropMult = v; updated++; }
+            } else if (low.contains("урон питомц") || low.contains("урона питомц")) {
+                if (raw.contains("%")) {
+                    p.petDamageBonusPct = v;
+                } else {
+                    p.petDamageMultMillions = v >= 10000.0 ? (v / 1_000_000.0) : v;
+                }
                 updated++;
-            } else if (low.contains("выпадения предметов")) {
+            } else if (low.contains("преобраз") || low.contains("конверс")) {
+                if (v > p.elementalConvertPct) p.elementalConvertPct = v;
+                updated++;
+            } else if (low.contains("возмезд")) {
+                p.retaliation = v; updated++;
+            } else if (low.contains("за удар") && (low.contains("убийств") || raw.contains("%"))) {
+                p.lifeStealBonusPct = v; updated++;
+            } else if (low.contains("за удар") && !low.contains("убийств")) {
+                p.lifeOnHit = v; updated++;
+            } else if (low.contains("за убийств")) {
+                p.lifeOnKill = v; updated++;
+            } else if (low.contains("все классовые навыки") || low.contains("классовым навыкам")) {
+                p.bonusAllClassSkills = (int) Math.round(v); updated++;
+            } else if (low.contains("выпадения предметов") || low.contains("поиск предметов")) {
                 p.itemDropPct = v; updated++;
             } else if (low.contains("выпадения материалов")) {
                 p.matDropPct = v; updated++;
             } else if (low.contains("выпадения рун")) {
                 p.runeDropPct = v; updated++;
-            } else if (low.contains("выпадения рубинов") || low.contains("выпадения ру6инов")) {
+            } else if (low.contains("выпадения рубинов")) {
                 p.rubyDropPct = v; updated++;
-            } else if (low.contains("доп. убийства") || low.contains("доп убийства")) {
+            } else if (low.contains("яиц")) {
+                p.eggDropPct = v; updated++;
+            } else if (low.contains("доп. убийств") || low.contains("доп убийств")) {
                 p.extraKillChance = v; updated++;
+            } else if (low.contains("бонус опыт") || low.contains("получение опыт")) {
+                p.expBonus = v; updated++;
+            } else if (low.contains("бонус золот") || low.contains("получение золот")) {
+                p.goldBonus = v; updated++;
             }
         }
         if (updated > 0) {
+            p.hasScannedStats = true;
+            p.scannedStatsCount = Math.max(p.scannedStatsCount, updated);
             p.lastUpdatedMs = System.currentTimeMillis();
         }
         return updated;
     }
 
     private static void parseEffAndRawPct(String raw, double fallbackVal, boolean isDr, DruidProfile p) {
-        Matcher m = PAREN_PCT.matcher(raw);
+        String cleaned = raw
+                .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
+                .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
+        Matcher m = PAREN_PCT.matcher(cleaned);
         if (m.find()) {
             try {
                 double eff = Double.parseDouble(m.group(1).replace(',', '.'));
@@ -471,15 +547,11 @@ public class ScreenAnalyzer {
             }
         }
         if (isDr) {
-            p.damageReductionEff = Math.min(99.0, fallbackVal);
-            if (fallbackVal > 95.0) p.damageReductionRaw = fallbackVal;
+            p.damageReductionEff = Math.min(95.0, fallbackVal);
+            p.damageReductionRaw = fallbackVal;
         } else {
-            if (fallbackVal > 95.0) {
-                p.dodgeEff = 95.0;
-                p.dodgeRaw = fallbackVal;
-            } else {
-                p.dodgeEff = fallbackVal;
-            }
+            p.dodgeEff = Math.min(95.0, fallbackVal);
+            p.dodgeRaw = fallbackVal;
         }
     }
 
@@ -507,7 +579,6 @@ public class ScreenAnalyzer {
     }
 
     private static int countGreenUpgradeBadges(int[] argb, int w, int h) {
-        // Считаем характерные зелёные кружки со стрелкой вверх в зоне куклы персонажа y=[24%..70%]
         int y0 = (int) (h * 0.24), y1 = (int) (h * 0.70);
         int x0 = (int) (w * 0.12), x1 = (int) (w * 0.88);
         int step = Math.max(4, w / 180);

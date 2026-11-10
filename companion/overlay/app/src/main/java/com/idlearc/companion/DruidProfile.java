@@ -4,17 +4,17 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
- * Живой профиль персонажа Друида.
- * По умолчанию предзаполнен реальным снимком [UND] AlfaGideon (Ур. 324, GS 3497, +20 ко всем навыкам),
- * и автоматически обновляется при сканировании окна «Характеристики персонажа» в игре.
+ * Динамический профиль персонажа Друида.
+ * НЕ содержит никаких захардкоженных чужих статов: наполняется исключительно визуальным OCR-сканированием
+ * окна «Характеристики персонажа» в игре (с поддержкой догрузки при прокрутке списка статов вверх/вниз).
  */
 public class DruidProfile {
 
     public enum BuildMode {
-        PUSH("🐾 Пуш / Пет", "Макс. итоговый урон питомца и выживаемость под кап 95%"),
-        BOSS("👹 Боссы / Рейд", "Одиночный босс, Босс гильдии и Рейды Разлома"),
-        FARM("💎 Фарм / Дроп", "Доп. убийство, яйца петов, рубины, руны, шмот и золото"),
-        LEVELING("🌱 1 → Кап", "Прокачка нового или сезонного Друида с 1 до 324+ уровня");
+        PUSH("🐾 Пуш / Пет", "Макс. итоговый урон и выживаемость (DPS × EHP)"),
+        BOSS("👹 Боссы / Рейд", "Одиночный босс, Босс гильдии, Башня и Рейды"),
+        FARM("💎 Фарм / Дроп", "Доп. убийство, предметы, рубины, руны, золото и опыт"),
+        LEVELING("🌱 1 → Кап", "Прокачка персонажа: опыт, база пета и закрытие капов");
 
         public final String title;
         public final String subtitle;
@@ -25,83 +25,118 @@ public class DruidProfile {
         }
     }
 
-    // Базовые параметры (снимок AlfaGideon Ур. 324, GS 3497)
-    public int charLevel = 324;
-    public int forgeLevel = 268;
-    public int gearScore = 3497;
-    public int bonusAllClassSkills = 20;
-
-    public double maxHp = 10790.0;
-    public double minAtk = 515600.0;
-    public double maxAtk = 736600.0;
-    public double defense = 78140.0;
-    public double damageReductionEff = 95.0;
-    public double damageReductionRaw = 95.1;
-
-    public double strength = 263.0;
-    public double agility = 1150.0;
-    public double intelligence = 1630.0;
-
-    public double critChance = 593.0;
-    public double critDamage = 1892.0;
-    public double doubleHitChance = 672.0;
-    public double doubleDamageChance = 984.0;
-    public double dodgeEff = 95.0;
-    public double dodgeRaw = 131.7;
-    public double blockChance = 0.0;
-    public double bossDamage = 100.0;
-
-    public double lifeOnHit = 268.0;
-    public double lifeOnKill = 1080.0;
-    public double lifeStealBonusPct = 20.0;
-    public double retaliation = 0.0;
-
-    public double petDamageMultMillions = 83.48; // x83.48M
-    public double expBonus = 1190.0;
-    public double goldBonus = 1051.0;
-
-    public double itemDropPct = 336.3;
-    public double itemDropMult = 2.70;
-    public double matDropPct = 455.6;
-    public double matDropMult = 2.98;
-    public double runeDropPct = 213.0;
-    public double runeDropMult = 2.36;
-    public double rubyDropPct = 97.0;
-    public double rubyDropMult = 1.82;
-    public double extraKillChance = 3.0;
-
-    public BuildMode mode = BuildMode.PUSH;
+    // Признак того, что статы героя реально сняты визуальным сканером с экрана игры
+    public boolean hasScannedStats = false;
+    public int scannedStatsCount = 0;
     public long lastUpdatedMs = 0L;
 
-    private static final String PREFS = "druid_helper_profile";
+    // Чистые базовые значения нового персонажа до первого скана «Характеристик персонажа»
+    public int charLevel = 1;
+    public int forgeLevel = 1;
+    public int gearScore = 0;
+    public int bonusAllClassSkills = 0;
+
+    public double maxHp = 0.0;
+    public double minAtk = 0.0;
+    public double maxAtk = 0.0;
+    public double defense = 0.0;
+    public double damageReductionEff = 0.0;
+    public double damageReductionRaw = 0.0;
+
+    public double strength = 0.0;
+    public double agility = 0.0;
+    public double intelligence = 0.0;
+
+    public double critChance = 5.0;
+    public double critDamage = 50.0;
+    public double doubleHitChance = 0.0;
+    public double doubleDamageChance = 0.0;
+    public double dodgeEff = 0.0;
+    public double dodgeRaw = 0.0;
+    public double blockChance = 0.0;
+    public double bossDamage = 0.0;
+
+    public double lifeOnHit = 0.0;
+    public double lifeOnKill = 0.0;
+    public double lifeStealBonusPct = 0.0;
+    public double retaliation = 0.0;
+
+    public double petDamageBonusPct = 0.0;
+    public double petDamageMultMillions = 0.0;
+    public double elementalConvertPct = 0.0;
+    public double eggDropPct = 0.0;
+    public double expBonus = 0.0;
+    public double goldBonus = 0.0;
+
+    public double itemDropPct = 0.0;
+    public double itemDropMult = 1.0;
+    public double matDropPct = 0.0;
+    public double matDropMult = 1.0;
+    public double runeDropPct = 0.0;
+    public double runeDropMult = 1.0;
+    public double rubyDropPct = 0.0;
+    public double rubyDropMult = 1.0;
+    public double extraKillChance = 0.0;
+
+    public BuildMode mode = BuildMode.PUSH;
+
+    private static final String PREFS = "druid_helper_live_profile_v2";
 
     public static DruidProfile load(Context ctx) {
         DruidProfile p = new DruidProfile();
         if (ctx == null) return p;
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        p.hasScannedStats = sp.getBoolean("hasScannedStats", false);
+        p.scannedStatsCount = sp.getInt("scannedStatsCount", 0);
+        p.lastUpdatedMs = sp.getLong("lastUpdatedMs", 0L);
+
         p.charLevel = sp.getInt("charLevel", p.charLevel);
         p.forgeLevel = sp.getInt("forgeLevel", p.forgeLevel);
         p.gearScore = sp.getInt("gearScore", p.gearScore);
         p.bonusAllClassSkills = sp.getInt("bonusAllClassSkills", p.bonusAllClassSkills);
+
+        p.maxHp = sp.getFloat("maxHp", (float) p.maxHp);
+        p.minAtk = sp.getFloat("minAtk", (float) p.minAtk);
+        p.maxAtk = sp.getFloat("maxAtk", (float) p.maxAtk);
+        p.defense = sp.getFloat("defense", (float) p.defense);
         p.damageReductionEff = sp.getFloat("drEff", (float) p.damageReductionEff);
         p.damageReductionRaw = sp.getFloat("drRaw", (float) p.damageReductionRaw);
+
         p.strength = sp.getFloat("str", (float) p.strength);
         p.agility = sp.getFloat("agi", (float) p.agility);
         p.intelligence = sp.getFloat("intel", (float) p.intelligence);
+
         p.critChance = sp.getFloat("critChance", (float) p.critChance);
         p.critDamage = sp.getFloat("critDamage", (float) p.critDamage);
         p.doubleHitChance = sp.getFloat("doubleHit", (float) p.doubleHitChance);
         p.doubleDamageChance = sp.getFloat("doubleDmg", (float) p.doubleDamageChance);
         p.dodgeEff = sp.getFloat("dodgeEff", (float) p.dodgeEff);
         p.dodgeRaw = sp.getFloat("dodgeRaw", (float) p.dodgeRaw);
+        p.blockChance = sp.getFloat("blockChance", (float) p.blockChance);
         p.bossDamage = sp.getFloat("bossDmg", (float) p.bossDamage);
+
+        p.lifeOnHit = sp.getFloat("lifeOnHit", (float) p.lifeOnHit);
+        p.lifeOnKill = sp.getFloat("lifeOnKill", (float) p.lifeOnKill);
+        p.lifeStealBonusPct = sp.getFloat("lifeStealBonusPct", (float) p.lifeStealBonusPct);
+        p.retaliation = sp.getFloat("retaliation", (float) p.retaliation);
+
+        p.petDamageBonusPct = sp.getFloat("petDmgPct", (float) p.petDamageBonusPct);
         p.petDamageMultMillions = sp.getFloat("petMultM", (float) p.petDamageMultMillions);
+        p.elementalConvertPct = sp.getFloat("elemConvPct", (float) p.elementalConvertPct);
+        p.eggDropPct = sp.getFloat("eggDropPct", (float) p.eggDropPct);
+        p.expBonus = sp.getFloat("expBonus", (float) p.expBonus);
+        p.goldBonus = sp.getFloat("goldBonus", (float) p.goldBonus);
+
         p.itemDropPct = sp.getFloat("itemDropPct", (float) p.itemDropPct);
+        p.itemDropMult = sp.getFloat("itemDropMult", (float) p.itemDropMult);
         p.matDropPct = sp.getFloat("matDropPct", (float) p.matDropPct);
+        p.matDropMult = sp.getFloat("matDropMult", (float) p.matDropMult);
         p.runeDropPct = sp.getFloat("runeDropPct", (float) p.runeDropPct);
+        p.runeDropMult = sp.getFloat("runeDropMult", (float) p.runeDropMult);
         p.rubyDropPct = sp.getFloat("rubyDropPct", (float) p.rubyDropPct);
+        p.rubyDropMult = sp.getFloat("rubyDropMult", (float) p.rubyDropMult);
         p.extraKillChance = sp.getFloat("extraKill", (float) p.extraKillChance);
-        p.lastUpdatedMs = sp.getLong("lastUpdatedMs", 0L);
+
         String m = sp.getString("mode", BuildMode.PUSH.name());
         try {
             p.mode = BuildMode.valueOf(m);
@@ -114,36 +149,117 @@ public class DruidProfile {
     public void save(Context ctx) {
         if (ctx == null) return;
         SharedPreferences.Editor ed = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+        ed.putBoolean("hasScannedStats", hasScannedStats);
+        ed.putInt("scannedStatsCount", scannedStatsCount);
+        ed.putLong("lastUpdatedMs", lastUpdatedMs);
+
         ed.putInt("charLevel", charLevel);
         ed.putInt("forgeLevel", forgeLevel);
         ed.putInt("gearScore", gearScore);
         ed.putInt("bonusAllClassSkills", bonusAllClassSkills);
+
+        ed.putFloat("maxHp", (float) maxHp);
+        ed.putFloat("minAtk", (float) minAtk);
+        ed.putFloat("maxAtk", (float) maxAtk);
+        ed.putFloat("defense", (float) defense);
         ed.putFloat("drEff", (float) damageReductionEff);
         ed.putFloat("drRaw", (float) damageReductionRaw);
+
         ed.putFloat("str", (float) strength);
         ed.putFloat("agi", (float) agility);
         ed.putFloat("intel", (float) intelligence);
+
         ed.putFloat("critChance", (float) critChance);
         ed.putFloat("critDamage", (float) critDamage);
         ed.putFloat("doubleHit", (float) doubleHitChance);
         ed.putFloat("doubleDmg", (float) doubleDamageChance);
         ed.putFloat("dodgeEff", (float) dodgeEff);
         ed.putFloat("dodgeRaw", (float) dodgeRaw);
+        ed.putFloat("blockChance", (float) blockChance);
         ed.putFloat("bossDmg", (float) bossDamage);
+
+        ed.putFloat("lifeOnHit", (float) lifeOnHit);
+        ed.putFloat("lifeOnKill", (float) lifeOnKill);
+        ed.putFloat("lifeStealBonusPct", (float) lifeStealBonusPct);
+        ed.putFloat("retaliation", (float) retaliation);
+
+        ed.putFloat("petDmgPct", (float) petDamageBonusPct);
         ed.putFloat("petMultM", (float) petDamageMultMillions);
+        ed.putFloat("elemConvPct", (float) elementalConvertPct);
+        ed.putFloat("eggDropPct", (float) eggDropPct);
+        ed.putFloat("expBonus", (float) expBonus);
+        ed.putFloat("goldBonus", (float) goldBonus);
+
         ed.putFloat("itemDropPct", (float) itemDropPct);
+        ed.putFloat("itemDropMult", (float) itemDropMult);
         ed.putFloat("matDropPct", (float) matDropPct);
+        ed.putFloat("matDropMult", (float) matDropMult);
         ed.putFloat("runeDropPct", (float) runeDropPct);
+        ed.putFloat("runeDropMult", (float) runeDropMult);
         ed.putFloat("rubyDropPct", (float) rubyDropPct);
+        ed.putFloat("rubyDropMult", (float) rubyDropMult);
         ed.putFloat("extraKill", (float) extraKillChance);
-        ed.putLong("lastUpdatedMs", lastUpdatedMs);
         ed.putString("mode", mode.name());
         ed.apply();
     }
 
+    /** Полный сброс сохранённых статов героя к чистому нулячему состоянию */
+    public void resetStats(Context ctx) {
+        BuildMode keepMode = this.mode;
+        DruidProfile fresh = new DruidProfile();
+        fresh.mode = keepMode;
+        copyFrom(fresh);
+        save(ctx);
+    }
+
+    private void copyFrom(DruidProfile o) {
+        this.hasScannedStats = o.hasScannedStats;
+        this.scannedStatsCount = o.scannedStatsCount;
+        this.lastUpdatedMs = o.lastUpdatedMs;
+        this.charLevel = o.charLevel;
+        this.forgeLevel = o.forgeLevel;
+        this.gearScore = o.gearScore;
+        this.bonusAllClassSkills = o.bonusAllClassSkills;
+        this.maxHp = o.maxHp;
+        this.minAtk = o.minAtk;
+        this.maxAtk = o.maxAtk;
+        this.defense = o.defense;
+        this.damageReductionEff = o.damageReductionEff;
+        this.damageReductionRaw = o.damageReductionRaw;
+        this.strength = o.strength;
+        this.agility = o.agility;
+        this.intelligence = o.intelligence;
+        this.critChance = o.critChance;
+        this.critDamage = o.critDamage;
+        this.doubleHitChance = o.doubleHitChance;
+        this.doubleDamageChance = o.doubleDamageChance;
+        this.dodgeEff = o.dodgeEff;
+        this.dodgeRaw = o.dodgeRaw;
+        this.blockChance = o.blockChance;
+        this.bossDamage = o.bossDamage;
+        this.lifeOnHit = o.lifeOnHit;
+        this.lifeOnKill = o.lifeOnKill;
+        this.lifeStealBonusPct = o.lifeStealBonusPct;
+        this.retaliation = o.retaliation;
+        this.petDamageBonusPct = o.petDamageBonusPct;
+        this.petDamageMultMillions = o.petDamageMultMillions;
+        this.elementalConvertPct = o.elementalConvertPct;
+        this.eggDropPct = o.eggDropPct;
+        this.expBonus = o.expBonus;
+        this.goldBonus = o.goldBonus;
+        this.itemDropPct = o.itemDropPct;
+        this.itemDropMult = o.itemDropMult;
+        this.matDropPct = o.matDropPct;
+        this.matDropMult = o.matDropMult;
+        this.runeDropPct = o.runeDropPct;
+        this.runeDropMult = o.runeDropMult;
+        this.rubyDropPct = o.rubyDropPct;
+        this.rubyDropMult = o.rubyDropMult;
+        this.extraKillChance = o.extraKillChance;
+    }
+
     /** Относительный прирост реального DPS от +1% Шанса двойного удара */
     public double marginalGainPer1PctDoubleHit() {
-        // Множитель = 1 + doubleHitChance / 100.0
         return 1.0 / (100.0 + Math.max(0.0, doubleHitChance)) * 100.0;
     }
 
@@ -152,10 +268,27 @@ public class DruidProfile {
         return 1.0 / (100.0 + Math.max(0.0, doubleDamageChance)) * 100.0;
     }
 
-    /** Относительный прирост реального DPS от +1% Крит. урона (или +1% Шанса крита выше 100%) */
-    public double marginalGainPer1PctCrit() {
-        // При крит шансе >= 100% каждый 1% крит шанса дает +1% крит урона; множитель крита = 1 + critDamage/100
-        return 1.0 / (100.0 + Math.max(100.0, critDamage)) * 100.0;
+    /** Относительный прирост реального DPS от +1% Крит. урона (при учёте текущего Шанса крита!) */
+    public double marginalGainPer1PctCritDamage() {
+        if (critChance >= 100.0) {
+            double effCd = Math.max(0.0, critDamage) + (critChance - 100.0);
+            return 1.0 / (100.0 + effCd) * 100.0;
+        }
+        double p = Math.max(0.0, critChance) / 100.0;
+        double denom = 100.0 + p * Math.max(0.0, critDamage);
+        return (p / denom) * 100.0;
+    }
+
+    /** Относительный прирост реального DPS от +1% Шанса крита (до 100% — ускоряет частоту крита, выше 100% — 1:1 в Крит. урон) */
+    public double marginalGainPer1PctCritChance() {
+        if (critChance >= 100.0) {
+            return marginalGainPer1PctCritDamage();
+        }
+        double cdFrac = Math.max(0.0, critDamage) / 100.0;
+        double p = Math.max(0.0, critChance) / 100.0;
+        double mBefore = 1.0 + p * cdFrac;
+        double mAfter = 1.0 + Math.min(1.0, p + 0.01) * cdFrac;
+        return ((mAfter / mBefore) - 1.0) * 100.0;
     }
 
     /** Относительный прирост урона по боссам от +1% Урона боссам */
