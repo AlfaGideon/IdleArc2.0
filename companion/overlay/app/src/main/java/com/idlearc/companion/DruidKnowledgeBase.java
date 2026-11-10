@@ -283,31 +283,38 @@ public class DruidKnowledgeBase {
                 continue;
             }
 
-            // 7. Интеллект (главный стат Друида: +0.1% урона питомца за очко)
+            // 7. Интеллект (официальная формула /api/config/game: 1 Инт = +0.20% Дв.урона + 0.38% Атаки + 0.05% Пета, БЕЗ капа!)
             if (low.contains("интеллект")) {
                 double pts = val > 0 ? val : 80.0;
-                ev.totalScore += pts * 0.14;
-                ev.pros.add(String.format(Locale.US, "🧠 +%.0f Интеллекта (+%.1f%% к пулу урона питомца)", pts, pts * 0.1));
+                double realDd = pts * 0.20;
+                double realGain = realDd * p.marginalGainPer1PctDoubleDamage() + (pts * 0.05 / 36.0);
+                ev.totalScore += realGain * 12.5;
+                ev.pros.add(String.format(Locale.US,
+                        "🧠 +%.0f Интеллекта (БЕЗ капа!) -> даёт +%.1f%% Шанса двойного урона и +%.1f%% Урона пета (~+%.2f%% итогового DPS!)",
+                        pts, realDd, pts * 0.05, realGain));
                 continue;
             }
 
-            // 8. Крит шанс / Крит урон
+            // 8. Крит шанс / Крит урон (официально игнорируют аффикс-кап; CC > 100% конвертируется 1:1 в Крит. урон)
             if (low.contains("шанс крит") || low.contains("крит. урон") || low.contains("крит урон") || low.contains("критического")) {
                 double pts = val > 0 ? val : 15.0;
                 double realGain = pts * p.marginalGainPer1PctCrit();
-                ev.totalScore += realGain * 12.0;
-                ev.pros.add(String.format(Locale.US, "🎯 +%.1f%% Крит -> +%.2f%% реального DPS (при %.0f%% крит. урона в 2.6× слабее Двойного удара за 1%%)", pts, realGain, p.critDamage));
+                ev.totalScore += realGain * 12.5;
+                ev.pros.add(String.format(Locale.US,
+                        "🎯 +%.1f%% Крит (игнорирует аффикс-кап!) -> +%.2f%% реального DPS", pts, realGain));
                 continue;
             }
 
-            // 9. Ловкость (полу-стат: +0.05% пет урона, но уклонение уже в капе!)
+            // 9. Ловкость (1 Ловк = +0.10% Урона пета + 0.05% Уклонения; при капе 95% уклонение сгорает!)
             if (low.contains("ловкост")) {
                 double pts = val > 0 ? val : 80.0;
-                ev.totalScore += pts * 0.06;
+                ev.totalScore += pts * 0.05;
                 if (p.dodgeRaw >= 95.0) {
-                    ev.traps.add(String.format(Locale.US, "⚠️ Ловкость (+%.0f): половина стата (уклонение) сгорает из-за капа 95%% (сейчас %.1f%%). Интеллект вдвое сильнее!", pts, p.dodgeRaw));
+                    ev.traps.add(String.format(Locale.US,
+                            "⚠️ Ловкость (+%.0f): даёт лишь +%.1f%% к пулу пета, а уклонение сгорает в капе 95%% (сейчас %.1f%%). Интеллект в ~6× сильнее по итоговому DPS!",
+                            pts, pts * 0.10, p.dodgeRaw));
                 } else {
-                    ev.pros.add(String.format(Locale.US, "🍃 +%.0f Ловкости (+%.1f%% урон пета и уклонение)", pts, pts * 0.05));
+                    ev.pros.add(String.format(Locale.US, "🍃 +%.0f Ловкости (+%.1f%% урон пета и +%.1f%% уклонения)", pts, pts * 0.10, pts * 0.05));
                 }
                 continue;
             }
@@ -387,7 +394,8 @@ public class DruidKnowledgeBase {
 
     public static double extractFirstNumber(String s) {
         if (s == null) return 0.0;
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМм])?").matcher(s);
+        String cleaned = s.replaceAll("(?<=\\d)[\\s\\u00A0]+(?=\\d{3}(?!\\d))", "");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМм])?").matcher(cleaned);
         double best = 0.0;
         while (m.find()) {
             try {
