@@ -588,7 +588,7 @@ public class AffixPositionOptimizer {
                     + " поз. (+" + fmt2(relativeUpgradePct) + "% к персонажу)";
         }
 
-        String details = buildLiveAnalyticalReport(detectedSlot, slotInferred, isShieldBase, itemHdr,
+        String details = buildLiveAnalyticalReport(ocrLines, detectedSlot, slotInferred, isShieldBase, itemHdr,
                 pool, rows, idealByPos, optimalAwakenPctForStat, rollModel, currentHeroState,
                 profile, curContributionPct, idealContributionPct, relativeUpgradePct, rerollCount);
 
@@ -601,6 +601,7 @@ public class AffixPositionOptimizer {
      * относительно состояния персонажа без этой строки (никаких скрытых шаблонов!).
      */
     private static String buildLiveAnalyticalReport(
+            List<IdleArcOcrEngine.OcrLine> ocrLines,
             SlotAffixAdvisor.GearSlot slot,
             boolean slotInferred,
             boolean isShieldBase,
@@ -791,6 +792,13 @@ public class AffixPositionOptimizer {
           .append("% (относительный прирост предмета: +").append(fmt2(relativeUpgradePct)).append("%).\n");
         if (rerollCount == 0) {
             sb.append("• Все типы аффиксов уже дают максимальную математическую отдачу под текущие характеристики.\n");
+        }
+
+        // Одновременный разбор блока «ГНЁЗДА» (камней, стоящих выше аффиксов на карточке предмета!)
+        String gemSection = GemSocketOptimizer.buildItemCardGemSection(
+                ocrLines, slot, itemHdr.isEquipped, currentHeroState, profile);
+        if (gemSection != null && !gemSection.isEmpty()) {
+            sb.append(gemSection);
         }
 
         sb.append("\n📚 Допустимый пул слота в игре (").append(formatPoolSummary(slot, compatiblePool)).append(")");

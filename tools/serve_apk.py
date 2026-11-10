@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.0.1 APK в 1 клик."""
+"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.1.0 APK и проверки OTA-манифеста."""
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.0.1.apk"
+APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.1.0.apk"
+MANIFEST_PATH = ROOT / "releases" / "ota-manifest.json"
 
 
 def get_meta():
@@ -21,6 +22,17 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
 
     def do_HEAD(self):
+        if self.path.startswith("/ota-manifest"):
+            if not MANIFEST_PATH.exists():
+                self.send_error(404)
+                return
+            raw = MANIFEST_PATH.read_bytes()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            return
         if self.path.startswith("/download") or self.path.endswith(".apk"):
             if not APK_PATH.exists():
                 self.send_error(404)
@@ -29,7 +41,7 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.1.apk"')
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.1.0.apk"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return
@@ -39,15 +51,28 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.path.startswith("/ota-manifest"):
+            if not MANIFEST_PATH.exists():
+                self.send_error(404)
+                return
+            raw = MANIFEST_PATH.read_bytes()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
         if self.path.startswith("/download") or self.path.endswith(".apk"):
             if not APK_PATH.exists():
                 self.send_error(404)
                 return
-            data, sha, _ = get_meta()
+            data, _, _ = get_meta()
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.0.1.apk"')
+            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.1.0.apk"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -66,14 +91,14 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IdleArc Druid Helper v2.0.1 APK</title>
+  <title>IdleArc Druid Helper v2.1.0 APK</title>
   <style>
     body {{
       margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #12101b; color: #f3f4f6; display: flex; justify-content: center; padding: 24px 16px;
     }}
     .card {{
-      max-width: 540px; width: 100%; background: #1b1829; border: 1.5px solid #34d399;
+      max-width: 560px; width: 100%; background: #1b1829; border: 1.5px solid #34d399;
       border-radius: 18px; padding: 22px; box-shadow: 0 12px 32px rgba(0,0,0,0.45);
     }}
     h1 {{ margin: 0 0 6px; font-size: 22px; color: #34d399; }}
@@ -93,19 +118,19 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <div class="card">
-    <h1>🌿 IdleArc Druid Helper v2.0.1</h1>
-    <div class="sub">Фикс точного чтения всех 5 позиций аффиксов (#1..#5) без пропуска и сдвига строк + живой реляционный математический симулятор</div>
-    <a class="btn" href="download/IdleArc-DruidHelper-v2.0.1.apk" download="IdleArc-DruidHelper-v2.0.1.apk">
-      📲 СКАЧАТЬ APK v2.0.1 ({kb:.1f} КБ)
+    <h1>🌿 IdleArc Druid Helper v2.1.0</h1>
+    <div class="sub">Обновление по воздуху (OTA) + живой анализатор «Гнёзда и Самоцветы» (одновременный скан камней над аффиксами + Обзор гнёзд + Кодекс самоцветов)</div>
+    <a class="btn" href="download/IdleArc-DruidHelper-v2.1.0.apk" download="IdleArc-DruidHelper-v2.1.0.apk">
+      📲 СКАЧАТЬ APK v2.1.0 ({kb:.1f} КБ)
     </a>
     <div class="meta">
-      <b>Пакет:</b> com.idlearc.companion · versionCode 201 (minSdk 24 / targetSdk 34)<br>
+      <b>Пакет:</b> com.idlearc.companion · versionCode 210 (minSdk 24 / targetSdk 34)<br>
       <b>SHA-256:</b> {sha}
     </div>
     <ul>
-      <li><b>Исправлено чтение 5/5 строк и нумерации позиций:</b> двухступенчатый классификатор (точный + нечёткий Levenshtein по пулу слота) и расширенная нормализация кириллицы/латиницы исключают пропуск строки (например, <code>двойноrо</code>) и сдвиг позиций #2..#5.</li>
-      <li><b>Защита от дубликатов аффиксов на предмете:</b> симулятор строго фиксирует уже стоящие на предмете статы на своих строках и никогда не советует роллить аффикс, который уже есть на другой позиции этого предмета.</li>
-      <li><b>Визуальная детекция надетого предмета:</b> распознаёт бордовую кнопку «Снять» даже при частичном перекрытии текста.</li>
+      <li><b>Обновление по воздуху (OTA):</b> проверка новых версий с GitHub прямо из главного экрана приложения, скачивание с проверкой SHA-256 и установка поверх без потери статов.</li>
+      <li><b>Одновременный скан камней на предмете:</b> при сканировании Оружия/Шлема/Факела/Брони читает самоцветы прямо над аффиксами и оценивает как основной камень, так и вторичные бонусы под текущую сборку.</li>
+      <li><b>Полная поддержка окон «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов»:</b> динамический расчёт под Пуш/Пет, Боссы, Фарм и Прокачку.</li>
     </ul>
   </div>
 </body>

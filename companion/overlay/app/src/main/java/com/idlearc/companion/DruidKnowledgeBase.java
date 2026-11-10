@@ -375,7 +375,7 @@ public class DruidKnowledgeBase {
         String cleaned = s
                 .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
                 .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб])?").matcher(cleaned);
+        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
         double best = 0.0;
         while (m.find()) {
             try {
@@ -400,7 +400,7 @@ public class DruidKnowledgeBase {
         String cleaned = s
                 .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
                 .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб])?").matcher(cleaned);
+        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
         List<Double> vals = new ArrayList<>();
         while (m.find()) {
             try {

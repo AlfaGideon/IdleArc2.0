@@ -131,6 +131,7 @@ public class MatrixCheck {
                 str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "DruidKnowledgeBase.java"),
                 str(SRC_DIR / "SlotAffixAdvisor.java"),
+                str(SRC_DIR / "GemSocketOptimizer.java"),
                 str(SRC_DIR / "AffixPositionOptimizer.java"),
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(tmp / "MatrixCheck.java"),

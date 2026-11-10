@@ -304,9 +304,58 @@ public class RelationalSuite {
             }
             ScreenAnalyzer.ScanResult hRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
             if (!hRes.shortBadge.contains("1/5") || !hRes.details.contains("Позиция #5")
-                    || !hRes.details.contains("[НАДЕТО на герое]")) {
-                throw new AssertionError("Buggy 1/4 shift recurred on Screenshot_20261111-014922.png: "
+                    || !hRes.details.contains("[НАДЕТО на герое]")
+                    || !hRes.details.contains("ГНЁЗДА И КАМНИ НА ПРЕДМЕТЕ")) {
+                throw new AssertionError("Buggy 1/4 shift or missing gem block on Screenshot_20261111-014922.png: "
                         + hRes.shortBadge + " | " + hRes.details);
+            }
+        }
+
+        // 6. Тест системы «ГНЁЗДА И САМОЦВЕТЫ»:
+        // а) Защита от ложного суффикса «М» в «+413.2 Макс. здоровье»
+        double parsedHpChip = DruidKnowledgeBase.extractFirstNumber("+413.2 Макс. здоровье");
+        if (Math.abs(parsedHpChip - 413.2) > 0.05) {
+            throw new AssertionError("Expected 413.2 for '+413.2 Макс. здоровье', got: " + parsedHpChip);
+        }
+
+        // б) Динамическая смена лучших камней под разные сборки (PUSH vs FARM vs LEVELING)
+        LiveBuildSimulator.HeroState gemHero = LiveBuildSimulator.buildHeroState(scannedFromScreenshots, 45.0, 0.0, 0.0);
+        List<GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemFamily>> pushWeapon =
+                GemSocketOptimizer.rankFamiliesForCategory(gemHero, GemSocketOptimizer.SocketCategory.WEAPON,
+                        GemSocketOptimizer.GemRarity.PERFECT, 100.0, 46, DruidProfile.BuildMode.PUSH);
+        List<GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemFamily>> farmWeapon =
+                GemSocketOptimizer.rankFamiliesForCategory(gemHero, GemSocketOptimizer.SocketCategory.WEAPON,
+                        GemSocketOptimizer.GemRarity.PERFECT, 100.0, 46, DruidProfile.BuildMode.FARM);
+        List<GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemFamily>> lvlArmor =
+                GemSocketOptimizer.rankFamiliesForCategory(gemHero, GemSocketOptimizer.SocketCategory.ARMOR,
+                        GemSocketOptimizer.GemRarity.PERFECT, 100.0, 46, DruidProfile.BuildMode.LEVELING);
+        if (pushWeapon.get(0).item != GemSocketOptimizer.GemFamily.JADE) {
+            throw new AssertionError("Expected JADE (#1 weapon gem in PUSH), got: " + pushWeapon.get(0).item);
+        }
+        if (farmWeapon.get(0).item != GemSocketOptimizer.GemFamily.AMBER) {
+            throw new AssertionError("Expected AMBER (#1 weapon gem in FARM), got: " + farmWeapon.get(0).item);
+        }
+        if (lvlArmor.get(0).item != GemSocketOptimizer.GemFamily.LAPIS) {
+            throw new AssertionError("Expected LAPIS (#1 XP armor gem in LEVELING), got: " + lvlArmor.get(0).item);
+        }
+
+        // в) Реальные скриншоты окон «Обзор гнёзд» и «Гнёзда · Оружие»
+        File overviewPng = new File(rootDir, "Screenshot_20261111-023330.png");
+        if (overviewPng.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(overviewPng, wh);
+            ScreenAnalyzer.ScanResult ov = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
+            if (!"Обзор гнёзд".equals(ov.screenType) || !ov.details.contains("114%")) {
+                throw new AssertionError("Sockets Overview failed to detect flawless 114% gem: " + ov.details);
+            }
+        }
+        File weaponSocketsPng = new File(rootDir, "Screenshot_20261111-023337.png");
+        if (weaponSocketsPng.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(weaponSocketsPng, wh);
+            ScreenAnalyzer.ScanResult ws = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
+            if (!ws.screenType.startsWith("Гнёзда слота") || !ws.details.contains("Гнездо #3")) {
+                throw new AssertionError("Weapon Sockets modal failed to parse all 3 sockets: " + ws.details);
             }
         }
 
@@ -352,6 +401,7 @@ public class RelationalSuite {
                 str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "DruidKnowledgeBase.java"),
                 str(SRC_DIR / "SlotAffixAdvisor.java"),
+                str(SRC_DIR / "GemSocketOptimizer.java"),
                 str(SRC_DIR / "AffixPositionOptimizer.java"),
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(tmp / "RelationalSuite.java"),

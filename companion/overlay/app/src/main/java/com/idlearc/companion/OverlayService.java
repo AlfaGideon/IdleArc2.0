@@ -69,14 +69,14 @@ public class OverlayService extends Service {
     private TextView cardBodyTv;
     private TextView autoToggleBtn;
     private final TextView[] modeButtons = new TextView[4];
-    private final TextView[] tabButtons = new TextView[5];
+    private final TextView[] tabButtons = new TextView[6];
     private HorizontalScrollView slotPickerScroll;
     private final TextView[] slotButtons = new TextView[SlotAffixAdvisor.GearSlot.values().length];
     private SlotAffixAdvisor.GearSlot selectedSlot = SlotAffixAdvisor.GearSlot.WEAPON;
 
     private boolean isExpanded = false;
     private boolean autoScanEnabled = false;
-    private int activeTab = 0; // 0=Скан, 1=Слоты и ★, 2=Аудит статов, 3=Надписи/Петы, 4=Гайд 1->Кап
+    private int activeTab = 0; // 0=Скан, 1=Слоты и ★, 2=Гнёзда, 3=Аудит статов, 4=Надписи/Петы, 5=Гайд 1->Кап
     private boolean scanInProgress = false;
     private long lastFrameSignature = 0L;
 
@@ -304,7 +304,7 @@ public class OverlayService extends Service {
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         headerTitleTv = new TextView(this);
-        headerTitleTv.setText("🌿 Druid Helper v2.0");
+        headerTitleTv.setText("🌿 Druid Helper v2.1");
         headerTitleTv.setTextColor(0xFF34D399);
         headerTitleTv.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
@@ -375,17 +375,20 @@ public class OverlayService extends Service {
         modeScroll.addView(modeRow);
         expandedCard.addView(modeScroll);
 
-        // Переключатель вкладок внутри оверлея
-        String[] tabNames = {"🎯 Скан", "🛠️ Слоты & ★", "📊 Статы", "✒️ Надписи", "🗺️ 1→Кап"};
+        // Переключатель вкладок внутри оверлея (с горизонтальным скроллом на 6 вкладок, включая «💎 Гнёзда»)
+        String[] tabNames = {"🎯 Скан", "🛠️ Слоты", "💎 Гнёзда", "📊 Статы", "✒️ Надписи", "🗺️ 1→Кап"};
+        HorizontalScrollView tabScroll = new HorizontalScrollView(this);
+        tabScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
         tabRow.setPadding(0, dp(2), 0, dp(6));
         for (int i = 0; i < tabNames.length; i++) {
             final int tabIdx = i;
             TextView tb = makeButton(tabNames[i], 0xFF201D2E, 0xFF9CA3AF, 10.5f);
-            tb.setPadding(dp(4), dp(5), dp(4), dp(5));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            if (i > 0) lp.leftMargin = dp(3);
+            tb.setPadding(dp(8), dp(5), dp(8), dp(5));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) lp.leftMargin = dp(4);
             tb.setGravity(Gravity.CENTER);
             tb.setLayoutParams(lp);
             tb.setOnClickListener(v -> {
@@ -395,7 +398,8 @@ public class OverlayService extends Service {
             tabButtons[i] = tb;
             tabRow.addView(tb);
         }
-        expandedCard.addView(tabRow);
+        tabScroll.addView(tabRow);
+        expandedCard.addView(tabScroll);
 
         // Полоса выбора конкретного вида предмета (11 слотов) — видна на вкладке «🛠️ Слоты & ★»
         slotPickerScroll = new HorizontalScrollView(this);
@@ -621,8 +625,8 @@ public class OverlayService extends Service {
 
         if (headerTitleTv != null) {
             headerTitleTv.setText(profile.hasScannedStats
-                    ? ("🌿 Druid Helper v2.0 · Скан: " + profile.scannedStatsCount + " стат.")
-                    : "🌿 Druid Helper v2.0 · Live OCR");
+                    ? ("🌿 Druid Helper v2.1 · Скан: " + profile.scannedStatsCount + " стат.")
+                    : "🌿 Druid Helper v2.1 · Live OCR");
         }
 
         pillAutoBtn.setText(autoScanEnabled ? "⚡ВКЛ" : "⚡");
@@ -691,11 +695,16 @@ public class OverlayService extends Service {
             cardHeadlineTv.setBackground(roundRect(0xFF3B1F5E, 0xFFC084FC, dp(1), dp(10)));
             cardBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(selectedSlot, profile));
         } else if (activeTab == 2) {
+            cardSubTypeTv.setText("Живой расчёт самоцветов под режим «" + profile.mode.title + "» (также работает СКАН на камнях!)");
+            cardHeadlineTv.setText("💎 Гнёзда и Самоцветы — лучшие камни и доп. статы");
+            cardHeadlineTv.setBackground(roundRect(0xFF064E3B, 0xFF34D399, dp(1), dp(10)));
+            cardBodyTv.setText(GemSocketOptimizer.buildOptimalGemBlueprint(profile, 46));
+        } else if (activeTab == 3) {
             cardSubTypeTv.setText("Живой профиль героя (обновляется кнопкой СКАН в «Характеристиках»)");
             cardHeadlineTv.setText("📊 Динамический математический разбор статов и капов");
             cardHeadlineTv.setBackground(roundRect(0xFF064E3B, 0xFF34D399, dp(1), dp(10)));
             cardBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
-        } else if (activeTab == 3) {
+        } else if (activeTab == 4) {
             cardSubTypeTv.setText("Расчёт ценности Автонадписей и механика отряда из 4 питомцев");
             cardHeadlineTv.setText("✒️ Живой приоритет Автонадписей и Петов");
             cardHeadlineTv.setBackground(roundRect(0xFF3B2F63, 0xFFA78BFA, dp(1), dp(10)));

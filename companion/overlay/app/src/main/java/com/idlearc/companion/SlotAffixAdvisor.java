@@ -27,7 +27,7 @@ public class SlotAffixAdvisor {
                         "лук", "арбалет", "копье", "копьё", "алебарда"
                 },
                 "Динамический расчёт пула из 18 серверных аффиксов оружия",
-                "База атаки оружия масштабирует навыки героя и урон питомцев. Гнездо оружия усиливает рубины/сапфиры на плоский элементальный урон.",
+                "База атаки оружия масштабирует навыки героя и урон питомцев. В оружии до 3 гнёзд самоцветов (Нефрит даёт +% Урона питомца, Лазурит — гибрид Атака/Пет/Возмездие, Янтарь — +% Золота).",
                 "По правилу Пробуждения игры (awaken): базовый урон оружия растёт на +12% за тир A1..A6, а кап проков «Двойного удара / Двойного урона» расширяется."
         ),
         TORCH(
@@ -276,6 +276,25 @@ public class SlotAffixAdvisor {
                   .append(ce.mathExplanation).append(")\n");
             }
             sb.append("\n");
+
+            int maxSocks = GemSocketOptimizer.SocketCategory.maxSocketsForSlot(slot);
+            if (maxSocks > 0) {
+                GemSocketOptimizer.SocketCategory sCat = GemSocketOptimizer.SocketCategory.fromGearSlot(slot);
+                List<GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemFamily>> famRank =
+                        GemSocketOptimizer.rankFamiliesForCategory(
+                                heroState, sCat, GemSocketOptimizer.GemRarity.PERFECT, 100.0, 46, profile.mode);
+                List<GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemSecondaryStat>> secRank =
+                        GemSocketOptimizer.rankSecondaries(
+                                heroState, GemSocketOptimizer.GemRarity.PERFECT, 100.0, 46, profile.mode);
+                GemSocketOptimizer.RankedGemChoice<GemSocketOptimizer.GemFamily> bestFam = famRank.get(0);
+                sb.append("💎 ГНЁЗДА СЛОТА (до ").append(maxSocks).append(" гн. · ").append(sCat.shortName).append("):\n")
+                  .append("  • Лучший камень под «").append(profile.mode.title).append("»: ")
+                  .append(bestFam.item.badge).append(" (").append(bestFam.summary)
+                  .append(" → +").append(fmt2(bestFam.totalGainPct)).append("% с гнезда)\n")
+                  .append("  • Топ-3 доп. бонуса на камнях: 1) ").append(secRank.get(0).item.ruName)
+                  .append(", 2) ").append(secRank.get(1).item.ruName)
+                  .append(", 3) ").append(secRank.get(2).item.ruName).append("\n\n");
+            }
         }
 
         sb.append("⚙️ МЕХАНИКА СЛОТА В ИГРЕ:\n• ").append(slot.slotMechanicsNote).append("\n");

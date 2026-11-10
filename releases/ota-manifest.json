@@ -1,0 +1,8 @@
+{
+  "versionCode": 210,
+  "versionName": "2.1.0",
+  "apkUrl": "https://github.com/AlfaGideon/IdleArc2.0/raw/arena/d18004e6-idlearc2-0/releases/IdleArc-DruidHelper-v2.1.0.apk",
+  "sha256": "d730ff26318ccb029d2a3a37a930c24f9b508cefe11e8c3450413b90ad8fd90c",
+  "sizeBytes": 242388,
+  "changelog": "v2.1.0: Добавлено обновление по воздуху (OTA с проверкой SHA-256) и полный анализатор «Гнёзда и Самоцветы» (одновременный скан камней прямо над аффиксами в карточке предмета, разбор окон «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов» под разные сборки Друида)."
+}

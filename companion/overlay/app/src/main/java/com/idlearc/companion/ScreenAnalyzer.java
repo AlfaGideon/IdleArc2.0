@@ -162,6 +162,25 @@ public class ScreenAnalyzer {
             return res;
         }
 
+        // 4б. ОКНА «ОБЗОР ГНЁЗД», «ГНЁЗДА · СЛОТ» И «КОДЕКС САМОЦВЕТОВ»
+        if (lowAll.contains("обзор гнезд") || lowAll.contains("обзор гнёзд")) {
+            return GemSocketOptimizer.analyzeSocketsOverview(metaLines, argb, w, h, profile);
+        }
+        if (GemSocketOptimizer.isSlotSocketsModal(lowAll, lines)) {
+            return GemSocketOptimizer.analyzeSlotSocketsModal(metaLines, profile);
+        }
+        if (lowAll.contains("кодекс самоцветов")
+                || (lowAll.contains("самоцветы") && (lowAll.contains("как это раб")
+                    || lowAll.contains("семеиства") || lowAll.contains("лестница гнезд")
+                    || lowAll.contains("второстепенные характеристики")))) {
+            res.screenType = "Кодекс самоцветов";
+            res.color = VerdictColor.GOOD;
+            res.shortBadge = "💎 Гайд камней (" + profile.mode.title + ")";
+            res.headline = "💎 Кодекс самоцветов — живой расчёт под «" + profile.mode.title + "»";
+            res.details = GemSocketOptimizer.buildOptimalGemBlueprint(profile, 46);
+            return res;
+        }
+
         // 5. СРАВНЕНИЕ ДВУХ ПРЕДМЕТОВ
         if (isItemComparisonScreen(lowAll)) {
             return analyzeItemComparison(ocr, argb, w, h, profile);

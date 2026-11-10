@@ -14,16 +14,19 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+
 /**
- * Главный экран приложения IdleArc Druid Helper v2.0.0.
- * Чистый визуальный OCR-сканер и реляционный математический симулятор снаряжения Друида
- * без предзаполненных статов или захардкоженных списков замен.
+ * Главный экран приложения IdleArc Druid Helper v2.1.0.
+ * Чистый визуальный OCR-сканер, анализатор Гнёзд/Самоцветов, реляционный симулятор снаряжения
+ * и встроенное обновление по воздуху (OTA).
  */
 public class MainActivity extends Activity {
 
@@ -32,9 +35,16 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIF = 5003;
 
     private TextView permStatusTv;
+    private TextView otaStatusTv;
+    private TextView otaActionBtn;
+    private OtaUpdater.ReleaseInfo availableRelease = null;
+    private boolean otaBusy = false;
+
+    private TextView gemBodyTv;
     private TextView auditBodyTv;
     private TextView inscBodyTv;
     private TextView slotDetailBodyTv;
+    private final TextView[] mainModeButtons = new TextView[DruidProfile.BuildMode.values().length];
     private SlotAffixAdvisor.GearSlot activeMainSlot = SlotAffixAdvisor.GearSlot.WEAPON;
     private DruidProfile profile;
 
@@ -50,6 +60,7 @@ public class MainActivity extends Activity {
         }
 
         buildMainScreen();
+        runOtaCheck(true);
     }
 
     @Override
@@ -58,9 +69,25 @@ public class MainActivity extends Activity {
         profile = DruidProfile.load(this);
         updatePermissionBanner();
         refreshDynamicCards();
+        OtaUpdater.resumePendingInstallIfPermitted(this);
     }
 
     private void refreshDynamicCards() {
+        DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
+        for (int i = 0; i < modes.length; i++) {
+            if (mainModeButtons[i] != null) {
+                boolean sel = (profile.mode == modes[i]);
+                GradientDrawable gd = new GradientDrawable();
+                gd.setColor(sel ? 0xFF065F46 : 0xFF252236);
+                gd.setCornerRadius(dp(10));
+                gd.setStroke(dp(1), sel ? 0xFF34D399 : 0xFF3F3B54);
+                mainModeButtons[i].setBackground(gd);
+                mainModeButtons[i].setTextColor(sel ? 0xFFECFDF5 : 0xFFD1D5DB);
+            }
+        }
+        if (gemBodyTv != null) {
+            gemBodyTv.setText(GemSocketOptimizer.buildOptimalGemBlueprint(profile, 46));
+        }
         if (auditBodyTv != null) {
             auditBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
         }
@@ -82,14 +109,14 @@ public class MainActivity extends Activity {
 
         // Заголовок
         TextView headerTitle = new TextView(this);
-        headerTitle.setText("🌿 IdleArc Druid Helper v2.0.1");
+        headerTitle.setText("🌿 IdleArc Druid Helper v2.1.0");
         headerTitle.setTextColor(0xFF34D399);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         root.addView(headerTitle);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Визуальный OCR-сканер + живой математический расчёт аффиксов по отношению к текущим статам · 0% хардкода");
+        subtitle.setText("Визуальный OCR-сканер аффиксов + Гнёзда/Самоцветы + обновление по воздуху (OTA) · 0% хардкода");
         subtitle.setTextColor(0xFF9CA3AF);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         subtitle.setPadding(0, dp(4), 0, dp(14));
@@ -143,6 +170,102 @@ public class MainActivity extends Activity {
         launchCard.addView(howToTv);
 
         root.addView(launchCard);
+
+        // Карточка обновления по воздуху (OTA)
+        LinearLayout otaCard = makeCard(0xFF16202B, 0xFF38BDF8);
+        LinearLayout.LayoutParams otaLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        otaLp.topMargin = dp(12);
+        otaCard.setLayoutParams(otaLp);
+
+        TextView otaTitle = new TextView(this);
+        otaTitle.setText("☁️ Обновление по воздуху (OTA)");
+        otaTitle.setTextColor(0xFF7DD3FC);
+        otaTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        otaTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        otaCard.addView(otaTitle);
+
+        otaStatusTv = new TextView(this);
+        otaStatusTv.setText("Текущая версия: v" + OtaUpdater.getCurrentVersionName(this)
+                + " (сборка " + OtaUpdater.getCurrentVersionCode(this) + ") · проверка обновлений...");
+        otaStatusTv.setTextColor(0xFFD1D5DB);
+        otaStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
+        otaStatusTv.setPadding(0, dp(4), 0, dp(8));
+        otaCard.addView(otaStatusTv);
+
+        otaActionBtn = makeBigButton("🔄 Проверить обновление на GitHub", 0xFF0369A1, 0xFFFFFFFF);
+        otaActionBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (otaBusy) return;
+                if (availableRelease != null) {
+                    startOtaDownload(availableRelease);
+                } else {
+                    runOtaCheck(false);
+                }
+            }
+        });
+        otaCard.addView(otaActionBtn);
+        root.addView(otaCard);
+
+        // Переключатель сборки + Карточка «💎 Гнёзда и Самоцветы»
+        LinearLayout gemCard = makeCard(0xFF172226, 0xFF34D399);
+        LinearLayout.LayoutParams gemLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        gemLp.topMargin = dp(14);
+        gemCard.setLayoutParams(gemLp);
+
+        TextView gemTitle = new TextView(this);
+        gemTitle.setText("💎 Гнёзда и Самоцветы под разные сборки");
+        gemTitle.setTextColor(0xFF6EE7B7);
+        gemTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        gemTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
+        gemCard.addView(gemTitle);
+
+        TextView gemSub = new TextView(this);
+        gemSub.setText("Выбери активную сборку — расчёт лучших камней и доп. статов пересчитается автоматически (а при скане предмета читает камни прямо над аффиксами!):");
+        gemSub.setTextColor(0xFF9CA3AF);
+        gemSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        gemSub.setPadding(0, dp(3), 0, dp(8));
+        gemCard.addView(gemSub);
+
+        HorizontalScrollView modeScroll = new HorizontalScrollView(this);
+        modeScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout modeRow = new LinearLayout(this);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setPadding(0, 0, 0, dp(10));
+        final DruidProfile.BuildMode[] allModes = DruidProfile.BuildMode.values();
+        for (int i = 0; i < allModes.length; i++) {
+            final DruidProfile.BuildMode bm = allModes[i];
+            TextView mb = new TextView(this);
+            mb.setText(bm.title);
+            mb.setTypeface(Typeface.DEFAULT_BOLD);
+            mb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            mb.setPadding(dp(10), dp(7), dp(10), dp(7));
+            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) mlp.leftMargin = dp(6);
+            mb.setLayoutParams(mlp);
+            mb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    profile.mode = bm;
+                    profile.save(MainActivity.this);
+                    refreshDynamicCards();
+                }
+            });
+            mainModeButtons[i] = mb;
+            modeRow.addView(mb);
+        }
+        modeScroll.addView(modeRow);
+        gemCard.addView(modeScroll);
+
+        gemBodyTv = new TextView(this);
+        gemBodyTv.setTextColor(0xFFF3F4F6);
+        gemBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
+        gemBodyTv.setLineSpacing(dp(2), 1.08f);
+        gemCard.addView(gemBodyTv);
+        root.addView(gemCard);
 
         // Интерактивная карточка: Подбор аффиксов и ★ Перерождения/Пробуждения под каждый вид предмета (11 слотов)
         LinearLayout slotCard = makeCard(0xFF1A162B, 0xFFC084FC);
@@ -287,6 +410,102 @@ public class MainActivity extends Activity {
         scroll.addView(root);
         setContentView(scroll);
         updatePermissionBanner();
+        refreshDynamicCards();
+    }
+
+    private void runOtaCheck(final boolean silentStartup) {
+        if (otaBusy) return;
+        otaBusy = true;
+        if (!silentStartup && otaStatusTv != null) {
+            otaStatusTv.setText("⏳ Проверка обновлений на GitHub...");
+            otaStatusTv.setTextColor(0xFF93C5FD);
+        }
+        OtaUpdater.checkForUpdatesAsync(this, new OtaUpdater.CheckCallback() {
+            @Override
+            public void onUpdateAvailable(OtaUpdater.ReleaseInfo latest, int currentCode, String currentName) {
+                otaBusy = false;
+                availableRelease = latest;
+                if (otaStatusTv != null) {
+                    String log = latest.changelog.isEmpty() ? "" : ("\nЧто нового: " + latest.changelog);
+                    otaStatusTv.setText("🔥 Доступна новая версия v" + latest.versionName
+                            + " (у тебя v" + currentName + ")!" + log);
+                    otaStatusTv.setTextColor(0xFF6EE7B7);
+                }
+                if (otaActionBtn != null) {
+                    otaActionBtn.setText("⬇️ СКАЧАТЬ И УСТАНОВИТЬ v" + latest.versionName);
+                    GradientDrawable gd = new GradientDrawable();
+                    gd.setColor(0xFF059669);
+                    gd.setCornerRadius(dp(12));
+                    otaActionBtn.setBackground(gd);
+                }
+            }
+
+            @Override
+            public void onUpToDate(int currentCode, String currentName) {
+                otaBusy = false;
+                availableRelease = null;
+                if (otaStatusTv != null) {
+                    otaStatusTv.setText("✅ Установлена актуальная версия v" + currentName + " (сборка " + currentCode + ")");
+                    otaStatusTv.setTextColor(0xFFA7F3D0);
+                }
+                if (otaActionBtn != null) {
+                    otaActionBtn.setText("🔄 Проверить обновление ещё раз");
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                otaBusy = false;
+                if (otaStatusTv != null) {
+                    otaStatusTv.setText("Текущая версия: v" + OtaUpdater.getCurrentVersionName(MainActivity.this)
+                            + (silentStartup ? " · нажми кнопку для проверки сети" : (" · " + message)));
+                    otaStatusTv.setTextColor(silentStartup ? 0xFF9CA3AF : 0xFFFCA5A5);
+                }
+            }
+        });
+    }
+
+    private void startOtaDownload(final OtaUpdater.ReleaseInfo rel) {
+        if (otaBusy) return;
+        otaBusy = true;
+        if (otaActionBtn != null) {
+            otaActionBtn.setText("⏳ Скачивание v" + rel.versionName + "...");
+        }
+        OtaUpdater.downloadUpdateAsync(this, rel, new OtaUpdater.DownloadCallback() {
+            @Override
+            public void onProgress(int percent, long downloadedBytes, long totalBytes) {
+                if (otaStatusTv != null) {
+                    String pStr = percent >= 0 ? (percent + "%") : ((downloadedBytes / 1024) + " КБ");
+                    otaStatusTv.setText("⬇️ Загрузка обновления v" + rel.versionName + ": " + pStr
+                            + " (проверка SHA-256...)");
+                    otaStatusTv.setTextColor(0xFF93C5FD);
+                }
+            }
+
+            @Override
+            public void onReadyToInstall(File apkFile) {
+                otaBusy = false;
+                if (otaStatusTv != null) {
+                    otaStatusTv.setText("✅ Файл v" + rel.versionName + " проверен! Подтверди установку поверх текущей версии.");
+                    otaStatusTv.setTextColor(0xFF6EE7B7);
+                }
+                if (otaActionBtn != null) {
+                    otaActionBtn.setText("📲 Установить скачанный v" + rel.versionName);
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                otaBusy = false;
+                if (otaStatusTv != null) {
+                    otaStatusTv.setText("❌ Ошибка обновления: " + message);
+                    otaStatusTv.setTextColor(0xFFFCA5A5);
+                }
+                if (otaActionBtn != null) {
+                    otaActionBtn.setText("🔄 Повторить скачивание v" + rel.versionName);
+                }
+            }
+        });
     }
 
     private void updatePermissionBanner() {

@@ -1,0 +1,72 @@
+name: Build & Publish OTA APK Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: "Описание обновления для OTA (покажется в приложении)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*.*.*"
+    branches:
+      - main
+    paths:
+      - "companion/**"
+      - "tools/build_companion_apk.py"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-ota:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Extract version from AndroidManifest.xml
+        id: ver
+        run: |
+          VER_NAME=$(grep -oP 'android:versionName="\K[^"]+' companion/overlay/app/src/main/AndroidManifest.xml)
+          VER_CODE=$(grep -oP 'android:versionCode="\K[0-9]+' companion/overlay/app/src/main/AndroidManifest.xml)
+          echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=IdleArc-DruidHelper-v${VER_NAME}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Build & sign APK with GitHub Secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          OTA_APK_URL: "https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version_name }}/${{ steps.ver.outputs.apk_name }}"
+          OTA_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is not set in GitHub Repository Secrets!"
+            exit 1
+          fi
+          python3 tools/build_companion_apk.py
+          python3 tools/inspect_apk.py "releases/${{ steps.ver.outputs.apk_name }}" --output /tmp/ota_inventory.json
+
+      - name: Publish GitHub Release (OTA endpoint)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version_name }}"
+          APK_FILE="releases/${{ steps.ver.outputs.apk_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_FILE" "releases/ota-manifest.json" --clobber
+          else
+            gh release create "$TAG" "$APK_FILE" "releases/ota-manifest.json" \
+              --title "IdleArc Druid Helper ${TAG}" \
+              --notes "Подписанный OTA-релиз ${TAG} (versionCode ${{ steps.ver.outputs.version_code }})."
+          fi
