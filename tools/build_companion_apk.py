@@ -36,9 +36,9 @@ OUT_DIR = ROOT / "releases"
 TOOLS_DIR = Path(os.environ.get("ANDROID_TOOLS_DIR", "/tmp/android-tools"))
 
 DEFAULT_CHANGELOG = (
-    "v2.1.0: Добавлено обновление по воздуху (OTA с проверкой SHA-256) и полный анализатор "
-    "«Гнёзда и Самоцветы» (одновременный скан камней прямо над аффиксами в карточке предмета, "
-    "разбор окон «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов» под разные сборки Друида)."
+    "v2.1.1: Подключена автосборка релизов через GitHub Secrets, мульти-канальное OTA-обновление "
+    "(GitHub Releases + main + рабочие ветки с проверкой SHA-256 и резервными зеркалами) и живой "
+    "анализатор «Гнёзда и Самоцветы» (одновременный скан камней над аффиксами + Обзор гнёзд + Кодекс)."
 )
 
 
@@ -148,29 +148,42 @@ def build_apk() -> Path:
             str(res_zip),
         ])
 
-        # 3. Компиляция Java -> .class
+        # 3. Компиляция Java -> .class (с заглушкой LambdaMetafactory для -bootclasspath android.jar,
+        #    так как дешугаринг лямбд выполняет D8 на шаге 4)
         java_sources = sorted(str(p) for p in (APP_MAIN / "java").rglob("*.java"))
         java_sources += sorted(str(p) for p in gen_dir.rglob("*.java"))
+        lm_dir = gen_dir / "java" / "lang" / "invoke"
+        lm_dir.mkdir(parents=True, exist_ok=True)
+        (lm_dir / "LambdaMetafactory.java").write_text(
+            "package java.lang.invoke;\n"
+            "public class LambdaMetafactory {\n"
+            "  public static CallSite metafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
+            "      MethodType m1, MethodHandle impl, MethodType m2) { return null; }\n"
+            "  public static CallSite altMetafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
+            "      Object... args) { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        java_sources_with_lm = java_sources + [str(lm_dir / "LambdaMetafactory.java")]
+
         if ecj_jar:
-            lm_dir = gen_dir / "java" / "lang" / "invoke"
-            lm_dir.mkdir(parents=True, exist_ok=True)
-            (lm_dir / "LambdaMetafactory.java").write_text(
-                "package java.lang.invoke;\n"
-                "public class LambdaMetafactory {\n"
-                "  public static CallSite metafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
-                "      MethodType m1, MethodHandle impl, MethodType m2) { return null; }\n"
-                "}\n",
-                encoding="utf-8",
-            )
-            java_sources_ecj = java_sources + [str(lm_dir / "LambdaMetafactory.java")]
             subprocess.check_call([
                 DEFAULT_JAVA, "-jar", ecj_jar,
                 "-8", "-nowarn", "-encoding", "UTF-8",
                 "-bootclasspath", android_jar,
                 "-d", str(cls_dir),
-                *java_sources_ecj,
+                *java_sources_with_lm,
             ])
-            shutil.rmtree(cls_dir / "java", ignore_errors=True)
+        elif (TOOLS_DIR / "tools.jar").exists():
+            subprocess.check_call([
+                DEFAULT_JAVA, "-cp", str(TOOLS_DIR / "tools.jar"),
+                "com.sun.tools.javac.Main",
+                "-source", "8", "-target", "8",
+                "-encoding", "UTF-8",
+                "-bootclasspath", android_jar,
+                "-d", str(cls_dir),
+                *java_sources_with_lm,
+            ])
         else:
             subprocess.check_call([
                 DEFAULT_JAVAC,
@@ -178,8 +191,9 @@ def build_apk() -> Path:
                 "-encoding", "UTF-8",
                 "-bootclasspath", android_jar,
                 "-d", str(cls_dir),
-                *java_sources,
+                *java_sources_with_lm,
             ])
+        shutil.rmtree(cls_dir / "java", ignore_errors=True)
 
         # 4. Сборка classes.dex через D8
         class_files = sorted(str(p) for p in cls_dir.rglob("*.class"))
@@ -247,9 +261,9 @@ def build_apk() -> Path:
         repo_slug = os.environ.get("GITHUB_REPOSITORY", "AlfaGideon/IdleArc2.0")
         ota_apk_url = os.environ.get(
             "OTA_APK_URL",
-            f"https://github.com/{repo_slug}/raw/arena/d18004e6-idlearc2-0/releases/{apk_filename}",
+            f"https://github.com/{repo_slug}/releases/download/v{ver_name}/{apk_filename}",
         )
-        changelog = os.environ.get("OTA_CHANGELOG", DEFAULT_CHANGELOG)
+        changelog = os.environ.get("OTA_CHANGELOG") or DEFAULT_CHANGELOG
         manifest_payload = {
             "versionCode": ver_code,
             "versionName": ver_name,

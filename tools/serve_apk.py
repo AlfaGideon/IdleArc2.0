@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper v2.1.0 APK и проверки OTA-манифеста."""
+"""Веб-страница Live Preview для скачивания собранного IdleArc Druid Helper APK и проверки OTA-манифеста."""
 import hashlib
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PATH = ROOT / "releases" / "IdleArc-DruidHelper-v2.1.0.apk"
-MANIFEST_PATH = ROOT / "releases" / "ota-manifest.json"
+MANIFEST_XML = ROOT / "companion" / "overlay" / "app" / "src" / "main" / "AndroidManifest.xml"
+MANIFEST_JSON = ROOT / "releases" / "ota-manifest.json"
+
+
+def read_current_apk_info() -> tuple[int, str, Path]:
+    xml = MANIFEST_XML.read_text(encoding="utf-8")
+    mc = re.search(r'android:versionCode="(\d+)"', xml)
+    mn = re.search(r'android:versionName="([^"]+)"', xml)
+    code = int(mc.group(1)) if mc else 211
+    name = mn.group(1) if mn else "2.1.1"
+    return code, name, ROOT / "releases" / f"IdleArc-DruidHelper-v{name}.apk"
 
 
 def get_meta():
-    data = APK_PATH.read_bytes()
+    code, name, apk_path = read_current_apk_info()
+    data = apk_path.read_bytes()
     sha = hashlib.sha256(data).hexdigest()
     kb = len(data) / 1024.0
-    return data, sha, kb
+    return code, name, apk_path.name, data, sha, kb
 
 
 class ApkDownloadHandler(BaseHTTPRequestHandler):
@@ -23,25 +34,22 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         if self.path.startswith("/ota-manifest"):
-            if not MANIFEST_PATH.exists():
+            if not MANIFEST_JSON.exists():
                 self.send_error(404)
                 return
-            raw = MANIFEST_PATH.read_bytes()
+            raw = MANIFEST_JSON.read_bytes()
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             return
+        _, _, apk_fname, data, _, _ = get_meta()
         if self.path.startswith("/download") or self.path.endswith(".apk"):
-            if not APK_PATH.exists():
-                self.send_error(404)
-                return
-            data, _, _ = get_meta()
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.1.0.apk"')
+            self.send_header("Content-Disposition", f'attachment; filename="{apk_fname}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return
@@ -52,10 +60,10 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/ota-manifest"):
-            if not MANIFEST_PATH.exists():
+            if not MANIFEST_JSON.exists():
                 self.send_error(404)
                 return
-            raw = MANIFEST_PATH.read_bytes()
+            raw = MANIFEST_JSON.read_bytes()
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -64,34 +72,23 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
+        code, name, apk_fname, data, sha, kb = get_meta()
         if self.path.startswith("/download") or self.path.endswith(".apk"):
-            if not APK_PATH.exists():
-                self.send_error(404)
-                return
-            data, _, _ = get_meta()
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "application/vnd.android.package-archive")
-            self.send_header("Content-Disposition", 'attachment; filename="IdleArc-DruidHelper-v2.1.0.apk"')
+            self.send_header("Content-Disposition", f'attachment; filename="{apk_fname}"')
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
             return
 
-        if not APK_PATH.exists():
-            body = b"APK not found"
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        _, sha, kb = get_meta()
         html = f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IdleArc Druid Helper v2.1.0 APK</title>
+  <title>IdleArc Druid Helper v{name} APK</title>
   <style>
     body {{
       margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -118,19 +115,18 @@ class ApkDownloadHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <div class="card">
-    <h1>🌿 IdleArc Druid Helper v2.1.0</h1>
-    <div class="sub">Обновление по воздуху (OTA) + живой анализатор «Гнёзда и Самоцветы» (одновременный скан камней над аффиксами + Обзор гнёзд + Кодекс самоцветов)</div>
-    <a class="btn" href="download/IdleArc-DruidHelper-v2.1.0.apk" download="IdleArc-DruidHelper-v2.1.0.apk">
-      📲 СКАЧАТЬ APK v2.1.0 ({kb:.1f} КБ)
+    <h1>🌿 IdleArc Druid Helper v{name}</h1>
+    <div class="sub">Автообновление по воздуху (OTA через GitHub Releases) + живой анализатор «Гнёзда и Самоцветы»</div>
+    <a class="btn" href="download/{apk_fname}" download="{apk_fname}">
+      📲 СКАЧАТЬ APK v{name} ({kb:.1f} КБ)
     </a>
     <div class="meta">
-      <b>Пакет:</b> com.idlearc.companion · versionCode 210 (minSdk 24 / targetSdk 34)<br>
+      <b>Пакет:</b> com.idlearc.companion · versionCode {code} (minSdk 24 / targetSdk 34)<br>
       <b>SHA-256:</b> {sha}
     </div>
     <ul>
-      <li><b>Обновление по воздуху (OTA):</b> проверка новых версий с GitHub прямо из главного экрана приложения, скачивание с проверкой SHA-256 и установка поверх без потери статов.</li>
-      <li><b>Одновременный скан камней на предмете:</b> при сканировании Оружия/Шлема/Факела/Брони читает самоцветы прямо над аффиксами и оценивает как основной камень, так и вторичные бонусы под текущую сборку.</li>
-      <li><b>Полная поддержка окон «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов»:</b> динамический расчёт под Пуш/Пет, Боссы, Фарм и Прокачку.</li>
+      <li><b>Автообновление по воздуху (OTA):</b> после установки этой версии все следующие обновления устанавливаются прямо из приложения одной кнопкой без ручного скачивания.</li>
+      <li><b>Одновременный скан камней и аффиксов:</b> читает гнёзда над аффиксами прямо на карточке предмета, а также окна «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов».</li>
     </ul>
   </div>
 </body>

@@ -304,7 +304,7 @@ public class OverlayService extends Service {
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         headerTitleTv = new TextView(this);
-        headerTitleTv.setText("🌿 Druid Helper v2.1");
+        headerTitleTv.setText("🌿 Druid Helper v" + OtaUpdater.getCurrentVersionName(this));
         headerTitleTv.setTextColor(0xFF34D399);
         headerTitleTv.setTypeface(Typeface.DEFAULT_BOLD);
         headerTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);

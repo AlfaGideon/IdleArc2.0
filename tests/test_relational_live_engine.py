@@ -13,9 +13,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = ROOT / "companion" / "overlay" / "app" / "src" / "main" / "java" / "com" / "idlearc" / "companion"
 GLYPHS_BIN = ROOT / "companion" / "overlay" / "app" / "src" / "main" / "assets" / "ocr_glyphs.bin"
 ECJ_JAR = Path("/tmp/android-tools/ecj.jar")
+TOOLS_JAR = Path("/tmp/android-tools/tools.jar")
 
 
-@unittest.skipUnless(ECJ_JAR.exists(), "Android ecj.jar toolchain not present")
+@unittest.skipUnless(
+    ECJ_JAR.exists() or TOOLS_JAR.exists() or (jdk4py.JAVA_HOME / "bin" / "javac").exists(),
+    "Java compiler toolchain not present",
+)
 class TestRelationalLiveEngine(unittest.TestCase):
     """
     Проверяет, что в v2.0.0:
@@ -407,9 +411,15 @@ public class RelationalSuite {
                 str(tmp / "RelationalSuite.java"),
             ]
             java_bin = str(jdk4py.JAVA)
+            javac_bin = str(jdk4py.JAVA_HOME / "bin" / "javac")
+            if ECJ_JAR.exists():
+                comp_cmd = [java_bin, "-Dfile.encoding=UTF-8", "-jar", str(ECJ_JAR), "-17", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
+            elif TOOLS_JAR.exists():
+                comp_cmd = [java_bin, "-Dfile.encoding=UTF-8", "-cp", str(TOOLS_JAR), "com.sun.tools.javac.Main", "-source", "8", "-target", "8", "-bootclasspath", "/tmp/android-tools/rt.jar", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
+            else:
+                comp_cmd = [javac_bin, "-J-Dfile.encoding=UTF-8", "--release", "17", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
             comp = subprocess.run(
-                [java_bin, "-Dfile.encoding=UTF-8", "-jar", str(ECJ_JAR), "-17", "-encoding", "UTF-8", "-d", str(tmp)]
-                + java_files,
+                comp_cmd,
                 capture_output=True,
                 text=True,
             )
