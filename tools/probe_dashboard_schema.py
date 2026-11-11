@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
 Safe schema & endpoint discovery for https://idlearc.com/api/dashboard.
-Strictly redacts all credentials, cookies, tokens, emails, user/character names, and account IDs.
+Strictly redacts all credentials, cookies, tokens, emails, user/character names, and account IDs,
+and emits sanitized schema chunks via GitHub Actions ::notice:: annotations.
 """
 from __future__ import annotations
 
 import html.parser
+import http.cookiejar
 import json
 import os
 import re
-import sys
+import urllib.error
 import urllib.parse
-import http.cookiejar
 import urllib.request
 
 
 BASE = "https://idlearc.com"
 
 SENSITIVE_EXACT_KEYS = {
-    "email", "e_mail", "mail", "password", "passwd", "pwd",
+    "email", "e_mail", "mail", "password", "passwd", "pwd", "password_hash",
     "token", "access_token", "refresh_token", "id_token", "csrf_token", "_csrf_token",
     "session", "session_id", "sid", "secret", "api_key", "auth_token",
     "ip", "ip_address", "last_ip", "stripe_customer_id", "subscription_id",
     "google_id", "apple_id", "discord_id", "user_id", "account_id", "owner_id",
     "username", "display_name", "character_name", "hero_name", "player_name", "guild_name",
-    "referral_code", "invite_code",
+    "referral_code", "invite_code", "friend_code", "code", "uid", "uuid",
 }
 
 
@@ -76,46 +77,60 @@ class LoginPageParser(html.parser.HTMLParser):
 
 
 def scrub(obj, parent_key: str = "", depth: int = 0):
-    if depth > 14:
+    if depth > 12:
         return "<MAX_DEPTH>"
-    if obj is None or isinstance(obj, (bool, int, float)):
-        if isinstance(obj, int) and parent_key.lower() in ("id", "user_id", "account_id", "character_id", "player_id", "guild_id"):
+    if obj is None or isinstance(obj, bool):
+        return obj
+    if isinstance(obj, (int, float)):
+        if parent_key.lower() in ("id", "user_id", "account_id", "character_id", "player_id", "guild_id"):
             return 0
         return obj
     if isinstance(obj, str):
         kl = parent_key.lower()
-        if kl in SENSITIVE_EXACT_KEYS or "token" in kl or "secret" in kl or "password" in kl or "email" in kl or "cookie" in kl:
+        if kl in SENSITIVE_EXACT_KEYS or any(w in kl for w in ("token", "secret", "password", "email", "cookie")):
             return "<REDACTED>"
-        if "@" in obj or re.match(r"^[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{10,}", obj):
+        if "@" in obj or re.match(r"^[A-Za-z0-9_-]{24,}$", obj):
             return "<REDACTED_STR>"
-        if kl == "name" and depth <= 3:
+        if kl in ("name", "title", "tag", "nickname") and depth <= 4:
             return "<REDACTED_NAME>"
-        if len(obj) > 160:
-            return obj[:160] + "...<TRUNC>"
+        if len(obj) > 100:
+            return obj[:100] + "...<TRUNC>"
         return obj
     if isinstance(obj, list):
         total = len(obj)
-        sample = [scrub(x, parent_key, depth + 1) for x in obj[:3]]
-        if total > 3:
+        sample = [scrub(x, parent_key, depth + 1) for x in obj[:2]]
+        if total > 2:
             sample.append(f"<... {total} items total>")
         return sample
     if isinstance(obj, dict):
         out = {}
-        for k, v in obj.items():
+        keys = list(obj.keys())
+        for k in keys[:60]:
             ks = str(k)
             if ks.lower() in SENSITIVE_EXACT_KEYS:
                 out[ks] = "<REDACTED>"
             else:
-                out[ks] = scrub(v, ks, depth + 1)
+                out[ks] = scrub(obj[k], ks, depth + 1)
+        if len(keys) > 60:
+            out["__more_keys__"] = f"{len(keys) - 60} more keys"
         return out
     return str(type(obj))
+
+
+def emit_notice(title: str, body: str) -> None:
+    escaped = (
+        body.replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+    )
+    print(f"::notice title={title}::{escaped}")
 
 
 def main() -> int:
     email = os.environ.get("IDLEARC_EMAIL", "").strip()
     password = os.environ.get("IDLEARC_PASSWORD", "")
     if not email or not password:
-        print("ERROR: IDLEARC_EMAIL or IDLEARC_PASSWORD secret is empty")
+        emit_notice("ProbeError", "IDLEARC_EMAIL or IDLEARC_PASSWORD is empty")
         return 1
 
     cj = http.cookiejar.CookieJar()
@@ -129,27 +144,26 @@ def main() -> int:
         r = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         return opener.open(r, timeout=25)
 
-    # 1. Inspect /login HTML
+    report_lines: list[str] = []
+
     resp = req(f"{BASE}/login")
     login_html = resp.read().decode("utf-8", errors="replace")
     parser = LoginPageParser()
     parser.feed(login_html)
 
-    print("=== LOGIN PAGE STRUCTURE ===")
-    print("Cookie names after GET /login:", [c.name for c in cj])
-    print("Meta keys:", list(parser.meta.keys()))
+    report_lines.append(f"Cookies_GET_login={[c.name for c in cj]}")
+    report_lines.append(f"Meta={list(parser.meta.keys())}")
     for idx, f in enumerate(parser.forms):
         safe_inputs = [{"name": i["name"], "type": i["type"], "has_val": bool(i["value"])} for i in f["inputs"]]
-        print(f"Form #{idx}: method={f['method']} action={f['action']} inputs={safe_inputs}")
+        report_lines.append(f"Form#{idx}: method={f['method']} action={f['action']} inputs={safe_inputs}")
     for sc in parser.scripts:
         if sc.startswith("SRC:"):
-            print("Script:", sc)
+            report_lines.append(f"Script={sc}")
         else:
             api_refs = re.findall(r"['\"](/api/[^'\"]+|/login[^'\"]*)['\"]", sc)
             if api_refs:
-                print("Inline script API refs:", api_refs)
+                report_lines.append(f"InlineRefs={api_refs}")
 
-    # 2. Build login payload from form
     form_action = "/login"
     payload_dict: dict[str, str] = {}
     csrf_val = ""
@@ -194,51 +208,61 @@ def main() -> int:
 
     try:
         post_resp = req(post_url, data=encoded, headers=post_headers, method="POST")
-        print("POST login final URL:", post_resp.geturl(), "status:", post_resp.status)
+        report_lines.append(f"POST_login_url={post_resp.geturl()} status={post_resp.status}")
     except urllib.error.HTTPError as e:
-        print("POST form login HTTPError:", e.code, e.reason)
+        report_lines.append(f"POST_login_HTTPError={e.code}")
 
-    print("Cookie names after POST /login:", [c.name for c in cj])
+    report_lines.append(f"Cookies_after_login={[c.name for c in cj]}")
 
-    # 3. Fetch /api/dashboard
-    print("\n=== FETCHING /api/dashboard ===")
+    # Fetch /api/dashboard
+    dash_json_str = ""
     try:
         dash_resp = req(
             f"{BASE}/api/dashboard",
             headers={"Accept": "application/json", "Referer": f"{BASE}/app/"},
         )
-        final_url = dash_resp.geturl()
         raw_bytes = dash_resp.read()
         ct = dash_resp.headers.get("Content-Type", "")
-        print(f"GET /api/dashboard -> status={dash_resp.status} final_url={final_url} content_type={ct} bytes={len(raw_bytes)}")
+        report_lines.append(
+            f"GET_dashboard: status={dash_resp.status} url={dash_resp.geturl()} ct={ct} bytes={len(raw_bytes)}"
+        )
         text = raw_bytes.decode("utf-8", errors="replace")
         try:
             data = json.loads(text)
-            print("Top-level keys:", list(data.keys()) if isinstance(data, dict) else type(data).__name__)
+            if isinstance(data, dict):
+                report_lines.append(f"TopKeys={list(data.keys())}")
+                for k, v in data.items():
+                    if isinstance(v, dict):
+                        report_lines.append(f"  dict[{k}] keys={list(v.keys())[:40]}")
+                    elif isinstance(v, list):
+                        first_keys = list(v[0].keys())[:35] if (v and isinstance(v[0], dict)) else type(v[0]).__name__ if v else "empty"
+                        report_lines.append(f"  list[{k}] len={len(v)} elem={first_keys}")
+                    else:
+                        report_lines.append(f"  scalar[{k}] type={type(v).__name__}")
             scrubbed = scrub(data)
-            formatted = json.dumps(scrubbed, ensure_ascii=False, indent=2)
-            # Print in clean chunks up to 45KB
-            print("=== SCRUBBED /api/dashboard STRUCTURE ===")
-            print(formatted[:45000])
-            if len(formatted) > 45000:
-                print(f"\n... <truncated from {len(formatted)} chars> ...")
+            dash_json_str = json.dumps(scrubbed, ensure_ascii=False, indent=2)
         except Exception as je:
-            print("Response was not JSON:", je)
-            print("First 400 chars (redacted):", re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "<EMAIL>", text[:400]))
+            report_lines.append(f"NotJSON={je} head={text[:220]}")
     except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:300]
-        print("GET /api/dashboard HTTPError:", e.code, err_body)
+        err_body = e.read().decode("utf-8", errors="replace")[:220]
+        report_lines.append(f"GET_dashboard_HTTPError={e.code} body={err_body}")
 
-    # 4. Also scan main.dart.js for /api/ routes so we know related read-only endpoints
+    # Scan main.dart.js for /api/* routes
     try:
         js_resp = req(f"{BASE}/app/main.dart.js")
         js_text = js_resp.read().decode("utf-8", errors="replace")
-        routes = sorted(set(re.findall(r"/api/[a-zA-Z0-9_/-]{2,45}", js_text)))
-        print("\n=== DISCOVERED /api/* ROUTES IN WEB CLIENT ===")
-        for rt in routes[:120]:
-            print(" ", rt)
+        routes = sorted(set(re.findall(r"/api/[a-zA-Z0-9_/-]{2,50}", js_text)))
+        report_lines.append(f"WebClientRoutes({len(routes)})={routes[:80]}")
     except Exception as e:
-        print("main.dart.js scan skipped:", e)
+        report_lines.append(f"JS_scan_err={e}")
+
+    emit_notice("Overview", "\n".join(report_lines))
+
+    if dash_json_str:
+        chunk_sz = 3200
+        for idx in range(0, min(len(dash_json_str), chunk_sz * 8), chunk_sz):
+            part = dash_json_str[idx : idx + chunk_sz]
+            emit_notice(f"DashboardSchema_{idx // chunk_sz + 1}", part)
 
     return 0
 
