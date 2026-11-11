@@ -530,8 +530,9 @@ public class OverlayService extends Service {
             pillStatusTv.setText("⏳ Скан...");
         }
 
-        // Прячем оверлей на 85 мс, чтобы он не загораживал текст игры на снимке
+        // Прячем оверлей на время захвата кадра (INVISIBLE + alpha 0), чтобы он не загораживал текст игры
         rootContainer.setAlpha(0.0f);
+        rootContainer.setVisibility(View.INVISIBLE);
         mainHandler.postDelayed(() -> workerHandler.post(() -> {
             int[] argb = null;
             int w = 0, h = 0;
@@ -563,7 +564,10 @@ public class OverlayService extends Service {
             }
 
             // Мгновенно возвращаем видимость виджета
-            mainHandler.post(() -> rootContainer.setAlpha(1.0f));
+            mainHandler.post(() -> {
+                rootContainer.setVisibility(View.VISIBLE);
+                rootContainer.setAlpha(1.0f);
+            });
 
             if (argb == null || w == 0 || h == 0) {
                 mainHandler.post(() -> {
@@ -602,7 +606,7 @@ public class OverlayService extends Service {
                     refreshUiContent();
                 }
             });
-        }), 90L);
+        }), 115L);
     }
 
     private static long computeCenterHash(int[] argb, int w, int h) {

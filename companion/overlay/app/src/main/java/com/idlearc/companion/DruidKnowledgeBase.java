@@ -367,41 +367,72 @@ public class DruidKnowledgeBase {
     }
 
     /**
-     * Извлекает числовое значение из OCR-строки с поддержкой разорванных пробелами чисел
-     * («1 0.79K» -> 10790, «1 .08K» -> 1080, «1 190.0%» -> 1190.0, «1051 .0%» -> 1051.0, «+21 3%» -> 213).
+     * Исправляет оптические подмены цифр в низкоконтрастном тексте (например, серое «(110.5%)» -> «(11С.5%)»,
+     * «2О58%» -> «2058%», «(95.С%)» -> «(95.0%)») строго внутри числового контекста, не затрагивая слова
+     * и маркер переноса строки «+55% l».
      */
-    public static double extractFirstNumber(String s) {
-        if (s == null) return 0.0;
+    public static String repairNumericOcr(String s) {
+        if (s == null || s.isEmpty()) return "";
         String cleaned = s
                 .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
                 .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
-        double best = 0.0;
-        while (m.find()) {
-            try {
-                double v = Double.parseDouble(m.group(1).replace(',', '.'));
-                String suf = m.group(2);
-                if (suf != null) {
-                    String sl = suf.toLowerCase(Locale.ROOT);
-                    if (sl.equals("k") || sl.equals("к")) v *= 1_000.0;
-                    else if (sl.equals("m") || sl.equals("м")) v *= 1_000_000.0;
-                    else if (sl.equals("b") || sl.equals("б")) v *= 1_000_000_000.0;
+        int n = cleaned.length();
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            char ch = cleaned.charAt(i);
+            char prev = i > 0 ? sb.charAt(i - 1) : ' ';
+            char next = (i + 1 < n) ? cleaned.charAt(i + 1) : ' ';
+            char next2 = (i + 2 < n) ? cleaned.charAt(i + 2) : ' ';
+
+            boolean prevDigit = (prev >= '0' && prev <= '9');
+            boolean prevDec = (prev == '.' || prev == ',') && i >= 2
+                    && sb.charAt(i - 2) >= '0' && sb.charAt(i - 2) <= '9';
+            boolean prevNumStart = (prev == '(' || prev == '+' || prev == '-' || prev == ' ');
+            boolean nextDigit = (next >= '0' && next <= '9');
+            boolean nextDecDigit = (next == '.' || next == ',') && (next2 >= '0' && next2 <= '9');
+            boolean nextNumEnd = (next == '%' || next == ')' || next == 'K' || next == 'k'
+                    || next == 'К' || next == 'к' || next == 'M' || next == 'm' || next == 'М' || next == 'м');
+
+            if (ch == 'О' || ch == 'о' || ch == 'O' || ch == 'o') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd || next == ' ' || i + 1 == n)) {
+                    ch = '0';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '0';
                 }
-                best = v;
-            } catch (Exception ignored) {
+            } else if (ch == 'С' || ch == 'с' || ch == 'C' || ch == 'c') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd)) {
+                    ch = '0';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '0';
+                }
+            } else if (ch == 'З' || ch == 'з') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd)) {
+                    ch = '3';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '3';
+                }
+            } else if (ch == 'l' || ch == 'I' || ch == '|') {
+                if ((prevDigit || prevDec || prev == '(' || prev == '+')
+                        && (nextDigit || nextDecDigit || next == '%' || next == ')')) {
+                    ch = '1';
+                }
+            } else if (ch == 'Б' || ch == 'б') {
+                if ((prevDigit || prevDec || prev == '(' || prev == '+')
+                        && (nextDigit || nextDecDigit || next == '%')) {
+                    ch = '6';
+                }
             }
+            sb.append(ch);
         }
-        return best;
+        return sb.toString();
     }
 
-    /** Извлекает средний урон из диапазона вида «5879 - 10.79K» или одиночного числа */
-    public static double extractRangeAverage(String s) {
-        if (s == null) return 0.0;
-        String cleaned = s
-                .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
-                .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
+    /** Извлекает все числа из строки по порядку (после починки OCR-подмен внутри чисел) */
+    public static List<Double> extractAllNumbers(String s) {
         List<Double> vals = new ArrayList<>();
+        if (s == null || s.isEmpty()) return vals;
+        String cleaned = repairNumericOcr(s);
+        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
         while (m.find()) {
             try {
                 double v = Double.parseDouble(m.group(1).replace(',', '.'));
@@ -416,6 +447,21 @@ public class DruidKnowledgeBase {
             } catch (Exception ignored) {
             }
         }
+        return vals;
+    }
+
+    /**
+     * Извлекает числовое значение из OCR-строки с поддержкой разорванных пробелами чисел и починки homoglyphs
+     * («1 0.79K» -> 10790, «95% (11С.5%)» -> 110.5, «1051 .0%» -> 1051.0, «+21 3%» -> 213).
+     */
+    public static double extractFirstNumber(String s) {
+        List<Double> vals = extractAllNumbers(s);
+        return vals.isEmpty() ? 0.0 : vals.get(vals.size() - 1);
+    }
+
+    /** Извлекает средний урон из диапазона вида «5879 - 10.79K» или одиночного числа */
+    public static double extractRangeAverage(String s) {
+        List<Double> vals = extractAllNumbers(s);
         if (vals.size() >= 2) {
             return 0.5 * (vals.get(vals.size() - 2) + vals.get(vals.size() - 1));
         }

@@ -1,8 +1,8 @@
 {
-  "versionCode": 211,
-  "versionName": "2.1.1",
-  "apkUrl": "https://github.com/AlfaGideon/IdleArc2.0/releases/download/v2.1.1/IdleArc-DruidHelper-v2.1.1.apk",
-  "sha256": "a40e9bbba4bb3a71368ca4fc63953a5ad550140b90d38aaf4b85e5485ec0128a",
-  "sizeBytes": 242389,
-  "changelog": "v2.1.1: Подключена автосборка релизов через GitHub Secrets, мульти-канальное OTA-обновление (GitHub Releases + main + рабочие ветки с проверкой SHA-256 и резервными зеркалами) и живой анализатор «Гнёзда и Самоцветы» (одновременный скан камней над аффиксами + Обзор гнёзд + Кодекс)."
+  "versionCode": 212,
+  "versionName": "2.1.2",
+  "apkUrl": "https://github.com/AlfaGideon/IdleArc2.0/releases/download/v2.1.2/IdleArc-DruidHelper-v2.1.2.apk",
+  "sha256": "7c718e50e78930a19add0c83dcb5c3c274a991a2728a8eccf45244b2aa9c1b47",
+  "sizeBytes": 242388,
+  "changelog": "v2.1.2: Исправлено чтение серых значений в скобках в «Характеристиках персонажа» (например, «95% (110.5%)» Уклонения и Снижения урона больше не искажаются из-за оптической подмены «0» -> «С»), добавлена фильтрация собственного виджета на кадре и чтение Шанса блока."
 }

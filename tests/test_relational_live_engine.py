@@ -316,10 +316,35 @@ public class RelationalSuite {
         }
 
         // 6. Тест системы «ГНЁЗДА И САМОЦВЕТЫ»:
-        // а) Защита от ложного суффикса «М» в «+413.2 Макс. здоровье»
+        // а) Защита от ложного суффикса «М» в «+413.2 Макс. здоровье» и починка серых скобок «95% (11С.5%)» -> 110.5%
         double parsedHpChip = DruidKnowledgeBase.extractFirstNumber("+413.2 Макс. здоровье");
         if (Math.abs(parsedHpChip - 413.2) > 0.05) {
             throw new AssertionError("Expected 413.2 for '+413.2 Макс. здоровье', got: " + parsedHpChip);
+        }
+        DruidProfile dodgeBugProfile = new DruidProfile();
+        ScreenAnalyzer.ScanResult dodgeSheetCheck = new ScreenAnalyzer.ScanResult();
+        // Прямой регрессионный тест строки с оптической подменой 0 -> С в серых скобках
+        double repairedParen = DruidKnowledgeBase.extractFirstNumber("шансуклонения Ф 95% (11С.5%)");
+        if (Math.abs(repairedParen - 110.5) > 0.05) {
+            throw new AssertionError("Expected 110.5 for '95% (11С.5%)', got: " + repairedParen);
+        }
+        File dodgeScreenshot = new File(rootDir, "Screenshot_20261111-035326.png");
+        if (dodgeScreenshot.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(dodgeScreenshot, wh);
+            ScreenAnalyzer.ScanResult dsRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], dodgeBugProfile);
+            if (!dsRes.profileUpdated
+                    || Math.abs(dodgeBugProfile.dodgeEff - 95.0) > 0.05
+                    || Math.abs(dodgeBugProfile.dodgeRaw - 110.5) > 0.05
+                    || Math.abs(dodgeBugProfile.agility - 988.0) > 0.1
+                    || Math.abs(dodgeBugProfile.intelligence - 2210.0) > 1.0
+                    || Math.abs(dodgeBugProfile.critChance - 572.7) > 0.1
+                    || Math.abs(dodgeBugProfile.critDamage - 2058.0) > 0.5) {
+                throw new AssertionError("Dodge 110.5% regression failed on Screenshot_20261111-035326.png: eff="
+                        + dodgeBugProfile.dodgeEff + " raw=" + dodgeBugProfile.dodgeRaw
+                        + " details=" + dsRes.details);
+            }
+            System.out.println("VERIFIED Screenshot_20261111-035326.png: " + dsRes.headline);
         }
 
         // б) Динамическая смена лучших камней под разные сборки (PUSH vs FARM vs LEVELING)

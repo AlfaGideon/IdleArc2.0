@@ -35,7 +35,7 @@ public class ScreenAnalyzer {
     }
 
     private static final Pattern PAREN_PCT = Pattern.compile(
-            "([0-9]+(?:[.,][0-9]+)?)%\\s*\\(\\s*([0-9]+(?:[.,][0-9]+)?)");
+            "([0-9]+(?:[.,][0-9]+)?)\\s*%\\s*\\(\\s*([0-9]+(?:[.,][0-9]+)?)");
     private static final Pattern CHAR_LEVEL_PAT = Pattern.compile(
             "(?:уровень|ур\\.?)\\s*:?\\s*([0-9]{1,4})", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
@@ -52,8 +52,13 @@ public class ScreenAnalyzer {
         int rx1 = (int) (w * 0.95);
         int ry0 = (int) (h * 0.08);
         int ry1 = (int) (h * 0.90);
+        int overlayTopY = detectSelfOverlayTopY(argb, w, h);
+        if (overlayTopY > ry0 + 120 && overlayTopY < ry1) {
+            ry1 = overlayTopY - 4;
+        }
 
-        List<IdleArcOcrEngine.OcrLine> rawMetaLines = ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1);
+        List<IdleArcOcrEngine.OcrLine> rawMetaLines = filterOutSelfOverlayLines(
+                ocr.recognizeLinesWithMeta(argb, w, h, rx0, ry0, rx1, ry1));
         List<IdleArcOcrEngine.OcrLine> metaLines = IdleArcOcrEngine.isolateActiveModalLines(rawMetaLines);
         List<String> lines = new ArrayList<>(metaLines.size());
         for (IdleArcOcrEngine.OcrLine ml : metaLines) {
@@ -440,12 +445,69 @@ public class ScreenAnalyzer {
     }
 
     /**
+     * Находит верхнюю изумрудную границу (#34D399) раскрытой карточки собственного виджета Druid Helper,
+     * чтобы отсечь её ещё до запуска OCR (например, при анализе готового скриншота с открытым оверлеем).
+     */
+    private static int detectSelfOverlayTopY(int[] argb, int w, int h) {
+        int x0 = (int) (w * 0.15);
+        int x1 = (int) (w * 0.85);
+        int span = Math.max(1, (x1 - x0) / 4);
+        int yStart = (int) (h * 0.25);
+        int yEnd = (int) (h * 0.90);
+        for (int y = yStart; y < yEnd; y++) {
+            int rowOff = y * w;
+            int emerald = 0;
+            for (int x = x0; x < x1; x += 4) {
+                int px = argb[rowOff + x];
+                int r = (px >> 16) & 0xFF;
+                int g = (px >> 8) & 0xFF;
+                int b = px & 0xFF;
+                if (g >= 185 && r <= 90 && b >= 120 && b <= 185 && (g - r) >= 110) {
+                    emerald++;
+                }
+            }
+            if (emerald >= (span * 65) / 100) {
+                return y;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Исключает строки собственного плавающего виджета Druid Helper, если кадр или скриншот
+     * содержал открытую карточку оверлея поверх игры.
+     */
+    private static List<IdleArcOcrEngine.OcrLine> filterOutSelfOverlayLines(List<IdleArcOcrEngine.OcrLine> src) {
+        if (src == null || src.isEmpty()) return src;
+        List<IdleArcOcrEngine.OcrLine> out = new ArrayList<>(src.size());
+        for (IdleArcOcrEngine.OcrLine ln : src) {
+            String rawLower = ln.text != null ? ln.text.toLowerCase(Locale.ROOT) : "";
+            String low = DruidKnowledgeBase.normalizeForMatch(ln.text);
+            if (rawLower.contains("druid helper")
+                    || low.contains("боссы рейд")
+                    || low.contains("пуш пет")
+                    || low.contains("распознано параметров")
+                    || low.contains("защитных капов")
+                    || low.contains("живой математический")
+                    || low.contains("считано с экрана")) {
+                break;
+            }
+            out.add(ln);
+        }
+        return out;
+    }
+
+    /**
      * Полный визуальный парсер окна «Характеристики персонажа» (все 26+ боевых, защитных и фарм-статов).
      */
     static int updateProfileFromStatsLines(List<String> lines, DruidProfile p) {
         int updated = 0;
         for (String raw : lines) {
             String low = DruidKnowledgeBase.normalizeForMatch(raw);
+            if (low.contains("чистого dps") || low.contains("до капа не хватает")
+                    || low.contains("при капе класса") || low.contains("распознано параметров")) {
+                continue;
+            }
 
             // Уровень персонажа
             Matcher lvlM = CHAR_LEVEL_PAT.matcher(low);
@@ -470,6 +532,9 @@ public class ScreenAnalyzer {
                 updated++;
             } else if (low.contains("уклонен")) {
                 parseEffAndRawPct(raw, v, false, p);
+                updated++;
+            } else if (low.contains("шанс блока")) {
+                p.blockChance = Math.max(0.0, v);
                 updated++;
             } else if (low.startsWith("сила") && !low.contains("талисман")) {
                 p.strength = v; updated++;
@@ -547,31 +612,39 @@ public class ScreenAnalyzer {
     }
 
     private static void parseEffAndRawPct(String raw, double fallbackVal, boolean isDr, DruidProfile p) {
-        String cleaned = raw
-                .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
-                .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
+        String cleaned = DruidKnowledgeBase.repairNumericOcr(raw);
         Matcher m = PAREN_PCT.matcher(cleaned);
         if (m.find()) {
             try {
                 double eff = Double.parseDouble(m.group(1).replace(',', '.'));
                 double rawPct = Double.parseDouble(m.group(2).replace(',', '.'));
+                if (rawPct < eff) {
+                    rawPct = eff;
+                }
                 if (isDr) {
-                    p.damageReductionEff = eff;
+                    p.damageReductionEff = Math.min(95.0, eff);
                     p.damageReductionRaw = rawPct;
                 } else {
-                    p.dodgeEff = eff;
+                    p.dodgeEff = Math.min(95.0, eff);
                     p.dodgeRaw = rawPct;
                 }
                 return;
             } catch (Exception ignored) {
             }
         }
+        List<Double> allNums = DruidKnowledgeBase.extractAllNumbers(cleaned);
+        double bestPct = fallbackVal;
+        for (double cand : allNums) {
+            if (cand > bestPct && cand <= 5000.0) {
+                bestPct = cand;
+            }
+        }
         if (isDr) {
-            p.damageReductionEff = Math.min(95.0, fallbackVal);
-            p.damageReductionRaw = fallbackVal;
+            p.damageReductionEff = Math.min(95.0, bestPct);
+            p.damageReductionRaw = bestPct;
         } else {
-            p.dodgeEff = Math.min(95.0, fallbackVal);
-            p.dodgeRaw = fallbackVal;
+            p.dodgeEff = Math.min(95.0, bestPct);
+            p.dodgeRaw = bestPct;
         }
     }
 
