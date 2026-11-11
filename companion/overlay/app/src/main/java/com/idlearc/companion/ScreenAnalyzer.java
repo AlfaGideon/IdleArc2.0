@@ -72,29 +72,31 @@ public class ScreenAnalyzer {
         String joined = joinedSb.toString();
         String lowAll = DruidKnowledgeBase.normalizeForMatch(joined);
 
-        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА»
+        // 1. ОКНО «ХАРАКТЕРИСТИКИ ПЕРСОНАЖА» (верхняя, средняя и нижняя прокрутка всех 31 строк)
         boolean hasItemModalMarkers = lowAll.contains("аффикс") || lowAll.contains("надеть")
                 || lowAll.contains("снять") || lowAll.contains("гнезд") || lowAll.contains("гнёзд")
                 || lowAll.contains("переков") || lowAll.contains("разобрать") || lowAll.contains("пробужд");
         boolean isCharStatsSheet = lowAll.contains("характеристики персонажа")
-                || (!hasItemModalMarkers && lowAll.contains("шанс блока") && lowAll.contains("возмезд"))
-                || (!hasItemModalMarkers && lowAll.contains("множитель добычи") && lowAll.contains("рубин"))
-                || (!hasItemModalMarkers && lowAll.contains("итоговый множитель") && lowAll.contains("питомц"));
+                || lowAll.contains("по мере их получения")
+                || (!hasItemModalMarkers && lowAll.contains("шанс блока") && (lowAll.contains("возмезд") || lowAll.contains("урон боссам")))
+                || (!hasItemModalMarkers && lowAll.contains("множител") && (lowAll.contains("рубин") || lowAll.contains("материал") || lowAll.contains("питомц")))
+                || (!hasItemModalMarkers && lowAll.contains("бонус опыт") && lowAll.contains("бонус золот") && (lowAll.contains("выпаден") || lowAll.contains("доп. убийств") || lowAll.contains("множител")));
         if (isCharStatsSheet) {
             res.screenType = "Характеристики персонажа";
             int updatedCount = updateProfileFromStatsLines(lines, profile);
             res.profileUpdated = (updatedCount > 0);
-            res.shortBadge = String.format(Locale.US, "📊 Скан статов (%d шт.)", updatedCount);
+            res.shortBadge = String.format(Locale.US, "📊 Профиль: %d стат.", profile.scannedStatsCount);
 
             if (profile.wastedDodgePct() > 1.0) {
                 res.color = VerdictColor.WARN;
                 res.headline = String.format(Locale.US,
-                        "⚠️ Считано %d статов! Уклонение выше капа 95%% (+%.1f%% впустую)",
-                        updatedCount, profile.wastedDodgePct());
+                        "⚠️ С экрана +%d стр. (в профиле: %d/31) · Уклонение %.1f%% > 95%%",
+                        updatedCount, profile.scannedStatsCount, profile.dodgeRaw);
             } else {
                 res.color = VerdictColor.GOOD;
                 res.headline = String.format(Locale.US,
-                        "✅ Считано с экрана %d статов и сохранено в живой профиль!", updatedCount);
+                        "✅ Считано с экрана %d стр. · Всего собрано в профиле: %d из 31!",
+                        updatedCount, profile.scannedStatsCount);
             }
             res.details = DruidKnowledgeBase.buildAuditReport(profile);
             return res;
@@ -264,25 +266,29 @@ public class ScreenAnalyzer {
             return res;
         }
 
-        // 8. Боевой экран или прочее окно
-        res.screenType = "Обзор / Бой";
+        // 8. Боевой экран или стороннее приложение (без открытой карточки IdleArc)
+        res.screenType = "Обзор / Ожидание окна IdleArc";
         res.color = VerdictColor.GOOD;
         res.shortBadge = "🌿 Готов (" + profile.mode.title + ")";
-        res.headline = "🌿 Открой «Характеристики персонажа», предмет, сравнение или навык";
+        res.headline = "🌿 На экране сейчас не открыта карточка предмета или статов IdleArc";
         StringBuilder preview = new StringBuilder();
-        preview.append("Режим целевой функции: ").append(profile.mode.title).append("\n")
-               .append("• Источник статов героя: ")
+        preview.append("Текущий режим расчёта: ").append(profile.mode.title).append("\n")
+               .append("• Сохранённый профиль героя: ")
                .append(profile.hasScannedStats
-                       ? ("живой скан (" + profile.scannedStatsCount + " параметров)")
-                       : "ещё не отсканирован (открой «Характеристики персонажа» и нажми СКАН)")
-               .append("\n")
-               .append("• Открой любую карточку предмета / сравнения / Автонадписи и нажми 🔍 СКАН для расчёта.\n");
-        if (!lines.isEmpty()) {
-            preview.append("\nВизуально считано с экрана (").append(lines.size()).append(" стр.):\n");
-            for (int i = 0; i < Math.min(5, lines.size()); i++) {
-                preview.append("  · ").append(lines.get(i)).append("\n");
-            }
+                       ? ("активен (собрано " + profile.scannedStatsCount + " из 31 параметров)")
+                       : "ещё не отсканирован")
+               .append("\n");
+        if (profile.hasScannedStats) {
+            preview.append(String.format(Locale.US,
+                    "• База расчёта: Инт %.0f · Ловк %.0f · Крит %.1f%%/%.0f%% · Дв.удар %.0f%% · Дв.урон %.0f%% · Укл %.1f%%\n",
+                    profile.intelligence, profile.agility, profile.critChance, profile.critDamage,
+                    profile.doubleHitChance, profile.doubleDamageChance, profile.dodgeRaw));
         }
+        preview.append("\n📷 Какие окна в игре можно сканировать кнопкой 🔍 СКАН:\n")
+               .append("  1) «Характеристики персонажа» (верх + прокрутка вниз для всех 31 строк)\n")
+               .append("  2) Любая карточка предмета (надетого или в сумке / кузнице)\n")
+               .append("  3) «Обзор гнёзд», «Гнёзда слота» и «Кодекс самоцветов»\n")
+               .append("  4) Сравнение двух предметов, Автонадписи и Навыки Друида");
         res.details = preview.toString();
         return res;
     }
@@ -498,14 +504,21 @@ public class ScreenAnalyzer {
     }
 
     /**
-     * Полный визуальный парсер окна «Характеристики персонажа» (все 26+ боевых, защитных и фарм-статов).
+     * Полный визуальный парсер всех 31 строк окна «Характеристики персонажа» (включая значения 0 / 0%
+     * и накопительную битовую маску при прокрутке списка характеристик вверх и вниз).
      */
     static int updateProfileFromStatsLines(List<String> lines, DruidProfile p) {
         int updated = 0;
         for (String raw : lines) {
             String low = DruidKnowledgeBase.normalizeForMatch(raw);
-            if (low.contains("чистого dps") || low.contains("до капа не хватает")
-                    || low.contains("при капе класса") || low.contains("распознано параметров")) {
+            if (low.isEmpty()
+                    || low.contains("характеристики персонажа")
+                    || low.contains("по мере их получения")
+                    || low.contains("чистого dps")
+                    || low.contains("до капа не хватает")
+                    || low.contains("при капе класса")
+                    || low.contains("распознано параметров")
+                    || low.contains("собрано в профиле")) {
                 continue;
             }
 
@@ -522,90 +535,152 @@ public class ScreenAnalyzer {
                 }
             }
 
-            double v = DruidKnowledgeBase.extractFirstNumber(raw);
-            if (v <= 0 && !low.contains("шанс блока")) continue;
+            List<Double> rowNums = DruidKnowledgeBase.extractAllNumbers(raw);
+            if (rowNums.isEmpty()) continue;
+            double v = Math.max(0.0, rowNums.get(rowNums.size() - 1));
 
+            int bit = -1;
             if (low.contains("очки снаряжения") || low.contains("gs")) {
                 if (v >= 10 && v <= 999999) { p.gearScore = (int) Math.round(v); updated++; }
             } else if (low.contains("снижение урона")) {
                 parseEffAndRawPct(raw, v, true, p);
-                updated++;
+                bit = 0;
             } else if (low.contains("уклонен")) {
                 parseEffAndRawPct(raw, v, false, p);
-                updated++;
-            } else if (low.contains("шанс блока")) {
-                p.blockChance = Math.max(0.0, v);
-                updated++;
+                bit = 1;
+            } else if (low.contains("шанс блока") || (low.contains("блок") && raw.contains("%"))) {
+                p.blockChance = v;
+                bit = 2;
             } else if (low.startsWith("сила") && !low.contains("талисман")) {
-                p.strength = v; updated++;
+                p.strength = v;
+                bit = 3;
             } else if (low.contains("ловкост")) {
-                p.agility = v; updated++;
+                p.agility = v;
+                bit = 4;
             } else if (low.contains("интеллект")) {
-                p.intelligence = v; updated++;
+                p.intelligence = v;
+                bit = 5;
             } else if ((low.contains("макс. здоров") || low.contains("макс здоров") || low.startsWith("здоровье"))
-                    && !low.contains("за удар") && !low.contains("за убийств") && !raw.contains("%")) {
-                p.maxHp = v; updated++;
+                    && !low.contains("за удар") && !low.contains("за убийств") && !low.contains("реген")
+                    && !raw.contains("%")) {
+                p.maxHp = v;
+                bit = 6;
             } else if (low.contains("урон атаки") && !raw.contains("%")) {
                 double avgAtk = DruidKnowledgeBase.extractRangeAverage(raw);
-                if (avgAtk > 0) { p.minAtk = avgAtk; p.maxAtk = avgAtk; updated++; }
+                if (avgAtk >= 0) { p.minAtk = avgAtk; p.maxAtk = avgAtk; bit = 7; }
             } else if (low.startsWith("защита") && !raw.contains("%")) {
-                p.defense = v; updated++;
+                p.defense = v;
+                bit = 8;
             } else if (low.contains("шанс крит") || low.contains("крит. удара")) {
-                p.critChance = v; updated++;
+                p.critChance = v;
+                bit = 9;
             } else if (low.contains("крит. урон") || low.contains("крит урон") || low.contains("критический урон")) {
-                p.critDamage = v; updated++;
+                p.critDamage = v;
+                bit = 10;
             } else if (low.contains("двойного удара") || low.contains("двойной удар")) {
-                p.doubleHitChance = v; updated++;
+                p.doubleHitChance = v;
+                bit = 11;
             } else if (low.contains("двойного урона") || low.contains("двойной урон")) {
-                p.doubleDamageChance = v; updated++;
-            } else if (low.contains("урон боссам") || low.contains("по боссам")) {
-                p.bossDamage = v; updated++;
-            } else if (low.contains("итоговый множитель")) {
-                if (low.contains("добыч") || low.contains("предмет")) { p.itemDropMult = v; updated++; }
-                else if (low.contains("материал")) { p.matDropMult = v; updated++; }
-                else if (low.contains("рубин")) { p.rubyDropMult = v; updated++; }
-                else if (low.contains("рун")) { p.runeDropMult = v; updated++; }
-            } else if (low.contains("урон питомц") || low.contains("урона питомц")) {
+                p.doubleDamageChance = v;
+                bit = 12;
+            } else if (low.contains("урон боссам") || low.contains("по боссам") || low.contains("боссам")) {
+                p.bossDamage = v;
+                bit = 13;
+            } else if (low.contains("множител")) {
+                if (low.contains("питомц")) {
+                    p.petDamageMultMillions = v >= 10000.0 ? (v / 1_000_000.0) : v;
+                    bit = 14;
+                } else if (low.contains("материал")) {
+                    p.matDropMult = v;
+                    bit = 15;
+                } else if (low.contains("рубин")) {
+                    p.rubyDropMult = v;
+                    bit = 16;
+                } else if (low.contains("рун")) {
+                    p.runeDropMult = v;
+                    bit = 17;
+                } else if (low.contains("яиц") || low.contains("яйц")) {
+                    p.eggDropMult = v;
+                    bit = 18;
+                } else if (low.contains("добыч") || low.contains("предмет") || low.contains("выпаден")) {
+                    p.itemDropMult = v;
+                    bit = 19;
+                }
+            } else if (low.contains("урон питомц") || low.contains("урона питомц") || low.contains("бонус питомц")) {
                 if (raw.contains("%")) {
                     p.petDamageBonusPct = v;
+                    bit = 20;
                 } else {
                     p.petDamageMultMillions = v >= 10000.0 ? (v / 1_000_000.0) : v;
+                    bit = 14;
                 }
-                updated++;
-            } else if (low.contains("преобраз") || low.contains("конверс")) {
-                if (v > p.elementalConvertPct) p.elementalConvertPct = v;
-                updated++;
-            } else if (low.contains("возмезд")) {
-                p.retaliation = v; updated++;
+            } else if (low.contains("возмезд") || low.contains("отражен")) {
+                p.retaliation = v;
+                bit = 21;
             } else if (low.contains("за удар") && (low.contains("убийств") || raw.contains("%"))) {
-                p.lifeStealBonusPct = v; updated++;
+                p.lifeStealBonusPct = v;
+                bit = 22;
             } else if (low.contains("за удар") && !low.contains("убийств")) {
-                p.lifeOnHit = v; updated++;
+                p.lifeOnHit = v;
+                bit = 23;
             } else if (low.contains("за убийств")) {
-                p.lifeOnKill = v; updated++;
-            } else if (low.contains("все классовые навыки") || low.contains("классовым навыкам")) {
-                p.bonusAllClassSkills = (int) Math.round(v); updated++;
-            } else if (low.contains("выпадения предметов") || low.contains("поиск предметов")) {
-                p.itemDropPct = v; updated++;
-            } else if (low.contains("выпадения материалов")) {
-                p.matDropPct = v; updated++;
-            } else if (low.contains("выпадения рун")) {
-                p.runeDropPct = v; updated++;
-            } else if (low.contains("выпадения рубинов")) {
-                p.rubyDropPct = v; updated++;
-            } else if (low.contains("яиц")) {
-                p.eggDropPct = v; updated++;
-            } else if (low.contains("доп. убийств") || low.contains("доп убийств")) {
-                p.extraKillChance = v; updated++;
-            } else if (low.contains("бонус опыт") || low.contains("получение опыт")) {
-                p.expBonus = v; updated++;
-            } else if (low.contains("бонус золот") || low.contains("получение золот")) {
-                p.goldBonus = v; updated++;
+                p.lifeOnKill = v;
+                bit = 24;
+            } else if (low.contains("классовые навыки") || low.contains("классовым навыкам") || low.contains("все навыки")) {
+                p.bonusAllClassSkills = (int) Math.round(v);
+                bit = 25;
+            } else if (low.contains("выпадения предметов") || low.contains("поиск предметов") || low.contains("добыча предметов")) {
+                p.itemDropPct = v;
+                bit = 26;
+            } else if (low.contains("материал")) {
+                p.matDropPct = v;
+                bit = 27;
+            } else if (low.contains("выпадения рун") || low.contains("добыча рун") || (low.contains("рун") && raw.contains("%"))) {
+                p.runeDropPct = v;
+                bit = 28;
+            } else if (low.contains("рубин")) {
+                p.rubyDropPct = v;
+                bit = 29;
+            } else if (low.contains("яиц") || low.contains("яйц")) {
+                p.eggDropPct = v;
+                bit = 30;
+            } else if (low.contains("доп. убийств") || low.contains("доп убийств") || (low.contains("дополнительн") && low.contains("убийств"))) {
+                p.extraKillChance = v;
+                bit = 31;
+            } else if (low.contains("бонус опыт") || low.contains("получение опыт") || (low.contains("опыт") && raw.contains("%"))) {
+                p.expBonus = v;
+                bit = 32;
+            } else if (low.contains("бонус золот") || low.contains("получение золот") || (low.contains("золот") && raw.contains("%"))) {
+                p.goldBonus = v;
+                bit = 33;
+            } else if (low.contains("преобраз") || low.contains("конверс") || low.contains("стихи")
+                    || low.contains("огн") || low.contains("холод") || low.contains("льда")
+                    || low.contains("молни") || low.contains("яд") || low.contains("тьм") || low.contains("свет")) {
+                if (v > p.elementalConvertPct) p.elementalConvertPct = v;
+                if (low.contains("огн")) bit = 34;
+                else if (low.contains("холод") || low.contains("лед") || low.contains("льд")) bit = 35;
+                else if (low.contains("молни")) bit = 36;
+                else if (low.contains("яд")) bit = 37;
+                else if (low.contains("тьм") || low.contains("хаос")) bit = 38;
+                else if (low.contains("свет") || low.contains("свят")) bit = 39;
+                else bit = 40;
+            } else {
+                // Универсальный учёт любой дополнительной строки в окне «Характеристики персонажа»
+                // (например, новых динамически открытых параметров «по мере их получения»)
+                String labelOnly = low.replaceAll("[0-9%+.,\\s]+", "");
+                if (labelOnly.length() >= 4 && labelOnly.length() <= 36) {
+                    bit = 48 + Math.abs(labelOnly.hashCode() % 14);
+                }
+            }
+
+            if (bit >= 0) {
+                p.scannedStatMask |= (1L << bit);
+                updated++;
             }
         }
         if (updated > 0) {
             p.hasScannedStats = true;
-            p.scannedStatsCount = Math.max(p.scannedStatsCount, updated);
+            p.scannedStatsCount = Math.max(p.scannedStatsCount, Math.max(updated, Long.bitCount(p.scannedStatMask)));
             p.lastUpdatedMs = System.currentTimeMillis();
         }
         return updated;

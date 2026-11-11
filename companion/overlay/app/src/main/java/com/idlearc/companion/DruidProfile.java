@@ -28,6 +28,7 @@ public class DruidProfile {
     // Признак того, что статы героя реально сняты визуальным сканером с экрана игры
     public boolean hasScannedStats = false;
     public int scannedStatsCount = 0;
+    public long scannedStatMask = 0L;
     public long lastUpdatedMs = 0L;
 
     // Чистые базовые значения нового персонажа до первого скана «Характеристик персонажа»
@@ -65,6 +66,7 @@ public class DruidProfile {
     public double petDamageMultMillions = 0.0;
     public double elementalConvertPct = 0.0;
     public double eggDropPct = 0.0;
+    public double eggDropMult = 1.0;
     public double expBonus = 0.0;
     public double goldBonus = 0.0;
 
@@ -88,6 +90,7 @@ public class DruidProfile {
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         p.hasScannedStats = sp.getBoolean("hasScannedStats", false);
         p.scannedStatsCount = sp.getInt("scannedStatsCount", 0);
+        p.scannedStatMask = sp.getLong("scannedStatMask", 0L);
         p.lastUpdatedMs = sp.getLong("lastUpdatedMs", 0L);
 
         p.charLevel = sp.getInt("charLevel", p.charLevel);
@@ -135,6 +138,7 @@ public class DruidProfile {
         p.runeDropMult = sp.getFloat("runeDropMult", (float) p.runeDropMult);
         p.rubyDropPct = sp.getFloat("rubyDropPct", (float) p.rubyDropPct);
         p.rubyDropMult = sp.getFloat("rubyDropMult", (float) p.rubyDropMult);
+        p.eggDropMult = sp.getFloat("eggDropMult", (float) p.eggDropMult);
         p.extraKillChance = sp.getFloat("extraKill", (float) p.extraKillChance);
 
         String m = sp.getString("mode", BuildMode.PUSH.name());
@@ -151,6 +155,7 @@ public class DruidProfile {
         SharedPreferences.Editor ed = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
         ed.putBoolean("hasScannedStats", hasScannedStats);
         ed.putInt("scannedStatsCount", scannedStatsCount);
+        ed.putLong("scannedStatMask", scannedStatMask);
         ed.putLong("lastUpdatedMs", lastUpdatedMs);
 
         ed.putInt("charLevel", charLevel);
@@ -198,6 +203,7 @@ public class DruidProfile {
         ed.putFloat("runeDropMult", (float) runeDropMult);
         ed.putFloat("rubyDropPct", (float) rubyDropPct);
         ed.putFloat("rubyDropMult", (float) rubyDropMult);
+        ed.putFloat("eggDropMult", (float) eggDropMult);
         ed.putFloat("extraKill", (float) extraKillChance);
         ed.putString("mode", mode.name());
         ed.apply();
@@ -215,6 +221,7 @@ public class DruidProfile {
     private void copyFrom(DruidProfile o) {
         this.hasScannedStats = o.hasScannedStats;
         this.scannedStatsCount = o.scannedStatsCount;
+        this.scannedStatMask = o.scannedStatMask;
         this.lastUpdatedMs = o.lastUpdatedMs;
         this.charLevel = o.charLevel;
         this.forgeLevel = o.forgeLevel;
@@ -255,6 +262,7 @@ public class DruidProfile {
         this.runeDropMult = o.runeDropMult;
         this.rubyDropPct = o.rubyDropPct;
         this.rubyDropMult = o.rubyDropMult;
+        this.eggDropMult = o.eggDropMult;
         this.extraKillChance = o.extraKillChance;
     }
 
@@ -268,26 +276,28 @@ public class DruidProfile {
         return 1.0 / (100.0 + Math.max(0.0, doubleDamageChance)) * 100.0;
     }
 
-    /** Относительный прирост реального DPS от +1% Крит. урона (при учёте текущего Шанса крита!) */
+    /** Относительный прирост реального DPS от +1% Крит. урона (с учётом порога насыщения 1500%) */
     public double marginalGainPer1PctCritDamage() {
-        if (critChance >= 100.0) {
-            double effCd = Math.max(0.0, critDamage) + (critChance - 100.0);
-            return 1.0 / (100.0 + effCd) * 100.0;
-        }
-        double p = Math.max(0.0, critChance) / 100.0;
-        double denom = 100.0 + p * Math.max(0.0, critDamage);
-        return (p / denom) * 100.0;
+        double p = Math.min(1.0, Math.max(0.0, critChance) / 100.0);
+        double cd = Math.max(0.0, critDamage);
+        double effBefore = cd <= 1500.0 ? cd : (1500.0 + (cd - 1500.0) * 0.12);
+        double cdNext = cd + 1.0;
+        double effAfter = cdNext <= 1500.0 ? cdNext : (1500.0 + (cdNext - 1500.0) * 0.12);
+        double mBefore = 1.0 + p * (effBefore / 100.0);
+        double mAfter = 1.0 + p * (effAfter / 100.0);
+        return ((mAfter / mBefore) - 1.0) * 100.0;
     }
 
-    /** Относительный прирост реального DPS от +1% Шанса крита (до 100% — ускоряет частоту крита, выше 100% — 1:1 в Крит. урон) */
+    /** Относительный прирост реального DPS от +1% Шанса крита (на капе >= 100% все удары уже критуют -> 0%) */
     public double marginalGainPer1PctCritChance() {
         if (critChance >= 100.0) {
-            return marginalGainPer1PctCritDamage();
+            return 0.0;
         }
-        double cdFrac = Math.max(0.0, critDamage) / 100.0;
+        double cd = Math.max(0.0, critDamage);
+        double effCdFrac = (cd <= 1500.0 ? cd : (1500.0 + (cd - 1500.0) * 0.12)) / 100.0;
         double p = Math.max(0.0, critChance) / 100.0;
-        double mBefore = 1.0 + p * cdFrac;
-        double mAfter = 1.0 + Math.min(1.0, p + 0.01) * cdFrac;
+        double mBefore = 1.0 + p * effCdFrac;
+        double mAfter = 1.0 + Math.min(1.0, p + 0.01) * effCdFrac;
         return ((mAfter / mBefore) - 1.0) * 100.0;
     }
 
@@ -299,5 +309,10 @@ public class DruidProfile {
     /** Лишнее уклонение сверх жёсткого капа Друида 95% */
     public double wastedDodgePct() {
         return Math.max(0.0, dodgeRaw - 95.0);
+    }
+
+    /** Лишний шанс крита сверх 100% вероятности крита */
+    public double wastedCritChancePct() {
+        return Math.max(0.0, critChance - 100.0);
     }
 }

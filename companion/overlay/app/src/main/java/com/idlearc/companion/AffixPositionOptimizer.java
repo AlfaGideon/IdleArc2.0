@@ -78,8 +78,8 @@ public class AffixPositionOptimizer {
         // Суффиксы (14 в серверном конфиге)
         DOUBLE_DAMAGE(AffixKind.SUFFIX, "Шанс двойного урона", true, false, 1.0, 2.0),
         DOUBLE_HIT(AffixKind.SUFFIX, "Шанс двойного удара", true, false, 1.0, 2.0),
-        CRIT_DAMAGE(AffixKind.SUFFIX, "Крит. урон", true, true, 1.0, 3.0),
-        CRIT_CHANCE(AffixKind.SUFFIX, "Шанс крита", true, true, 1.0, 2.0),
+        CRIT_DAMAGE(AffixKind.SUFFIX, "Крит. урон", true, false, 1.0, 3.0),
+        CRIT_CHANCE(AffixKind.SUFFIX, "Шанс крита", true, false, 1.0, 2.0),
         INTELLIGENCE(AffixKind.SUFFIX, "Интеллект", false, true, 2.0, 4.0),
         DEXTERITY(AffixKind.SUFFIX, "Ловкость", false, true, 2.0, 4.0),
         STRENGTH(AffixKind.SUFFIX, "Сила", false, true, 2.0, 4.0),
@@ -178,7 +178,8 @@ public class AffixPositionOptimizer {
 
         public double expectedAvgRoll(AffixType t, double awakenMult) {
             if (t == AffixType.EMPTY_POSITION) return 0.0;
-            if (t == AffixType.DOUBLE_DAMAGE || t == AffixType.DOUBLE_HIT) {
+            if (t == AffixType.DOUBLE_DAMAGE || t == AffixType.DOUBLE_HIT
+                    || t == AffixType.CRIT_DAMAGE || t == AffixType.CRIT_CHANCE) {
                 return Math.min(t.baseAvg * unitScale, procCapBase) * awakenMult;
             }
             if (t == AffixType.BLOODTHIRST) {
@@ -641,6 +642,13 @@ public class AffixPositionOptimizer {
         if (slotInferred) {
             sb.append("⚠️ Заголовок предмета вне кадра — слот определён по набору статов. Если открыт другой слот, нажми его кнопку выше.\n");
         }
+        if (slot == SlotAffixAdvisor.GearSlot.HELMET
+                || slot == SlotAffixAdvisor.GearSlot.CHEST
+                || slot == SlotAffixAdvisor.GearSlot.GLOVES
+                || slot == SlotAffixAdvisor.GearSlot.BOOTS
+                || slot == SlotAffixAdvisor.GearSlot.TORCH) {
+            sb.append("ℹ️ Пул слота в игре: Интеллект, Ловкость и Шанс двойного удара на этом слоте не выпадают (они доступны на Оружии, Поясе, Амулете и Кольцах).\n");
+        }
 
         Set<AffixType> idealSet = new HashSet<>(idealByPos);
         int n = rows.size();
@@ -892,7 +900,8 @@ public class AffixPositionOptimizer {
                 if (rowHi < upperBound) upperBound = rowHi;
                 weightedSum += unboosted / r.type.baseAvg;
                 uncappedCount++;
-            } else if (r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.DOUBLE_HIT) {
+            } else if (r.type == AffixType.DOUBLE_DAMAGE || r.type == AffixType.DOUBLE_HIT
+                    || r.type == AffixType.CRIT_DAMAGE || r.type == AffixType.CRIT_CHANCE) {
                 if (unboosted > observedProcCap) observedProcCap = unboosted;
             } else if (r.type == AffixType.BLOODTHIRST) {
                 if (unboosted > observedBloodthirstCap) observedBloodthirstCap = unboosted;

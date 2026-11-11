@@ -85,16 +85,16 @@ public class OtaUpdater {
             //noinspection deprecation
             return pi.versionCode;
         } catch (Exception e) {
-            return 212;
+            return 213;
         }
     }
 
     public static String getCurrentVersionName(Context ctx) {
         try {
             PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
-            return pi.versionName != null ? pi.versionName : "2.1.2";
+            return pi.versionName != null ? pi.versionName : "2.1.3";
         } catch (Exception e) {
-            return "2.1.2";
+            return "2.1.3";
         }
     }
 
