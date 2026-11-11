@@ -1,0 +1,25 @@
+name: Probe IdleArc Dashboard API Schema
+
+on:
+  push:
+    branches:
+      - "arena/**"
+    paths:
+      - "tools/probe_dashboard_schema.py"
+      - ".github/workflows/probe-api.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Probe /api/dashboard schema (redacted)
+        env:
+          IDLEARC_EMAIL: ${{ secrets.IDLEARC_EMAIL }}
+          IDLEARC_PASSWORD: ${{ secrets.IDLEARC_PASSWORD }}
+        run: python3 tools/probe_dashboard_schema.py
