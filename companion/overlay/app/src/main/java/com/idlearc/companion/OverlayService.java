@@ -313,27 +313,34 @@ public class OverlayService extends Service {
         attachDragOnly(header);
         attachDragOnly(headerTitleTv);
 
-        TextView scanNowBtn = makeButton("🔍 СКАН", 0xFF059669, 0xFFFFFFFF, 11.5f);
+        TextView scanNowBtn = makeButton("🔍 СКАН", 0xFF059669, 0xFFFFFFFF, 11f);
         scanNowBtn.setOnClickListener(v -> {
             activeTab = 0;
             triggerScreenScan(false);
         });
 
-        autoToggleBtn = makeButton("⚡ АВТО: ВЫКЛ", 0xFF2B283A, 0xFFE5E7EB, 11f);
+        TextView apiSyncBtn = makeButton("🌐 API", 0xFF0284C7, 0xFFFFFFFF, 11f);
+        LinearLayout.LayoutParams apiLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        apiLp.leftMargin = dp(4);
+        apiSyncBtn.setLayoutParams(apiLp);
+        apiSyncBtn.setOnClickListener(v -> triggerApiSync());
+
+        autoToggleBtn = makeButton("⚡ АВТО", 0xFF2B283A, 0xFFE5E7EB, 10.5f);
         LinearLayout.LayoutParams atLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        atLp.leftMargin = dp(5);
+        atLp.leftMargin = dp(4);
         autoToggleBtn.setLayoutParams(atLp);
         autoToggleBtn.setOnClickListener(v -> toggleAutoScan());
 
-        TextView minBtn = makeButton("➖", 0xFF2B283A, 0xFFFBBF24, 11.5f);
+        TextView minBtn = makeButton("➖", 0xFF2B283A, 0xFFFBBF24, 11f);
         LinearLayout.LayoutParams minLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        minLp.leftMargin = dp(5);
+        minLp.leftMargin = dp(4);
         minBtn.setLayoutParams(minLp);
         minBtn.setOnClickListener(v -> setExpanded(false));
 
-        TextView closeBtn = makeButton("✖", 0xFF3F1D28, 0xFFFCA5A5, 11.5f);
+        TextView closeBtn = makeButton("✖", 0xFF3F1D28, 0xFFFCA5A5, 11f);
         LinearLayout.LayoutParams clLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         clLp.leftMargin = dp(4);
@@ -342,6 +349,7 @@ public class OverlayService extends Service {
 
         header.addView(headerTitleTv);
         header.addView(scanNowBtn);
+        header.addView(apiSyncBtn);
         header.addView(autoToggleBtn);
         header.addView(minBtn);
         header.addView(closeBtn);
@@ -366,6 +374,11 @@ public class OverlayService extends Service {
                 profile.save(OverlayService.this);
                 if (lastScanResult != null && lastScanResult.isAffixItemScan) {
                     ScreenAnalyzer.recomputeAffixScan(lastScanResult, lastScanResult.detectedSlot, profile);
+                } else if (lastScanResult != null
+                        && "API Сервера (/api/dashboard)".equals(lastScanResult.screenType)
+                        && IdleArcApiClient.getCachedDashboard() != null) {
+                    lastScanResult = IdleArcApiClient.buildFullDashboardScanResult(
+                            IdleArcApiClient.getCachedDashboard(), profile);
                 }
                 refreshUiContent();
             });
@@ -624,20 +637,56 @@ public class OverlayService extends Service {
         return hash;
     }
 
+    private void triggerApiSync() {
+        if (!IdleArcApiClient.hasSavedCredentials(this)) {
+            Toast.makeText(this, "Сначала введи Email и пароль от IdleArc в главном окне Druid Helper!", Toast.LENGTH_LONG).show();
+            Intent i = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return;
+        }
+        if (scanInProgress) return;
+        scanInProgress = true;
+        pillStatusTv.setText("⏳ API...");
+        cardHeadlineTv.setText("⏳ Загрузка живого /api/dashboard с сервера IdleArc...");
+        IdleArcApiClient.syncAsync(this, profile, new IdleArcApiClient.ApiCallback() {
+            @Override
+            public void onSuccess(final ScreenAnalyzer.ScanResult sr) {
+                mainHandler.post(() -> {
+                    scanInProgress = false;
+                    lastScanResult = sr;
+                    activeTab = 0;
+                    setExpanded(true);
+                    Toast.makeText(OverlayService.this,
+                            "✅ API синхронизирован: 31 стат, 10 вещей и 20 гнёзд!", Toast.LENGTH_SHORT).show();
+                });
+            }
+
+            @Override
+            public void onError(final String errorMessage) {
+                mainHandler.post(() -> {
+                    scanInProgress = false;
+                    refreshUiContent();
+                    Toast.makeText(OverlayService.this, "❌ API: " + errorMessage, Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
     private void refreshUiContent() {
         if (rootContainer == null) return;
 
+        String verStr = OtaUpdater.getCurrentVersionName(this);
         if (headerTitleTv != null) {
             headerTitleTv.setText(profile.hasScannedStats
-                    ? ("🌿 Druid Helper v2.1 · Скан: " + profile.scannedStatsCount + " стат.")
-                    : "🌿 Druid Helper v2.1 · Live OCR");
+                    ? ("🌿 v" + verStr + " · " + profile.scannedStatsCount + " стат.")
+                    : ("🌿 Druid Helper v" + verStr));
         }
 
         pillAutoBtn.setText(autoScanEnabled ? "⚡ВКЛ" : "⚡");
         pillAutoBtn.setBackground(roundRect(autoScanEnabled ? 0xFF065F46 : 0xFF2B283A,
                 autoScanEnabled ? 0xFF34D399 : 0xFF4B5563, dp(1), dp(14)));
 
-        autoToggleBtn.setText(autoScanEnabled ? "⚡ АВТО: ВКЛ" : "⚡ АВТО: ВЫКЛ");
+        autoToggleBtn.setText(autoScanEnabled ? "⚡ВКЛ" : "⚡АВТО");
         autoToggleBtn.setBackground(roundRect(autoScanEnabled ? 0xFF065F46 : 0xFF2B283A,
                 autoScanEnabled ? 0xFF34D399 : 0xFF4B5563, dp(1), dp(12)));
 
@@ -697,7 +746,9 @@ public class OverlayService extends Service {
             cardSubTypeTv.setText("Выбери слот выше · Режим: " + profile.mode.title + " (разные пулы аффиксов!)");
             cardHeadlineTv.setText("🛠️ " + selectedSlot.shortChip + " — " + selectedSlot.awakenHeadline);
             cardHeadlineTv.setBackground(roundRect(0xFF3B1F5E, 0xFFC084FC, dp(1), dp(10)));
-            cardBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(selectedSlot, profile));
+            String apiSlotDetail = IdleArcApiClient.buildEquippedSlotDetailFromCache(selectedSlot, profile);
+            String baseGuide = SlotAffixAdvisor.formatSlotGuide(selectedSlot, profile);
+            cardBodyTv.setText(apiSlotDetail != null ? (apiSlotDetail + "\n\n" + baseGuide) : baseGuide);
         } else if (activeTab == 2) {
             cardSubTypeTv.setText("Живой расчёт самоцветов под режим «" + profile.mode.title + "» (также работает СКАН на камнях!)");
             cardHeadlineTv.setText("💎 Гнёзда и Самоцветы — лучшие камни и доп. статы");

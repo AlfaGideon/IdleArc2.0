@@ -12,9 +12,11 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -24,9 +26,9 @@ import android.widget.Toast;
 import java.io.File;
 
 /**
- * Главный экран приложения IdleArc Druid Helper v2.1.0.
- * Чистый визуальный OCR-сканер, анализатор Гнёзд/Самоцветов, реляционный симулятор снаряжения
- * и встроенное обновление по воздуху (OTA).
+ * Главный экран приложения IdleArc Druid Helper v2.2.0.
+ * Прямая синхронизация с официальным API (idlearc.com/api/dashboard), визуальный OCR-сканер,
+ * анализатор Гнёзд/Самоцветов, реляционный симулятор снаряжения и обновление по воздуху (OTA).
  */
 public class MainActivity extends Activity {
 
@@ -39,6 +41,10 @@ public class MainActivity extends Activity {
     private TextView otaActionBtn;
     private OtaUpdater.ReleaseInfo availableRelease = null;
     private boolean otaBusy = false;
+
+    private TextView apiStatusTv;
+    private TextView apiReportTv;
+    private boolean apiBusy = false;
 
     private TextView gemBodyTv;
     private TextView auditBodyTv;
@@ -61,6 +67,9 @@ public class MainActivity extends Activity {
 
         buildMainScreen();
         runOtaCheck(true);
+        if (IdleArcApiClient.hasSavedCredentials(this)) {
+            triggerMainApiSync();
+        }
     }
 
     @Override
@@ -95,7 +104,15 @@ public class MainActivity extends Activity {
             inscBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
         }
         if (slotDetailBodyTv != null && activeMainSlot != null) {
-            slotDetailBodyTv.setText(SlotAffixAdvisor.formatSlotGuide(activeMainSlot, profile));
+            String apiSlot = IdleArcApiClient.buildEquippedSlotDetailFromCache(activeMainSlot, profile);
+            String baseGuide = SlotAffixAdvisor.formatSlotGuide(activeMainSlot, profile);
+            slotDetailBodyTv.setText(apiSlot != null ? (apiSlot + "\n\n" + baseGuide) : baseGuide);
+        }
+        if (apiReportTv != null && IdleArcApiClient.getCachedDashboard() != null) {
+            ScreenAnalyzer.ScanResult sr = IdleArcApiClient.buildFullDashboardScanResult(
+                    IdleArcApiClient.getCachedDashboard(), profile);
+            apiReportTv.setText(sr.details);
+            apiReportTv.setVisibility(View.VISIBLE);
         }
     }
 
@@ -116,7 +133,7 @@ public class MainActivity extends Activity {
         root.addView(headerTitle);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Визуальный OCR-сканер аффиксов + Гнёзда/Самоцветы + обновление по воздуху (OTA) · 0% хардкода");
+        subtitle.setText("Прямая синхронизация с сервером /api/dashboard + Live OCR + Гнёзда/Самоцветы + OTA");
         subtitle.setTextColor(0xFF9CA3AF);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
         subtitle.setPadding(0, dp(4), 0, dp(14));
@@ -207,6 +224,116 @@ public class MainActivity extends Activity {
         });
         otaCard.addView(otaActionBtn);
         root.addView(otaCard);
+
+        // Карточка прямой синхронизации с официальным API игры (https://idlearc.com/api/dashboard)
+        LinearLayout apiCard = makeCard(0xFF132030, 0xFF38BDF8);
+        LinearLayout.LayoutParams apiCardLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        apiCardLp.topMargin = dp(14);
+        apiCard.setLayoutParams(apiCardLp);
+
+        TextView apiTitle = new TextView(this);
+        apiTitle.setText("🌐 Прямая синхронизация с сервером (idlearc.com/api/dashboard)");
+        apiTitle.setTextColor(0xFF7DD3FC);
+        apiTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        apiTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.2f);
+        apiCard.addView(apiTitle);
+
+        apiStatusTv = new TextView(this);
+        apiStatusTv.setText(IdleArcApiClient.hasSavedCredentials(this)
+                ? ("✅ Аккаунт подключён (" + IdleArcApiClient.getSavedEmail(this) + ") · можно обновлять в 1 клик кнопкой «🌐 API» прямо в виджете!")
+                : "Введи Email и пароль от IdleArc один раз (хранятся только локально на твоём телефоне). За 0.4 сек загружает все 31 стат, все 10 надетых вещей и все 20 камней с 0% погрешности OCR!");
+        apiStatusTv.setTextColor(0xFFD1D5DB);
+        apiStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.1f);
+        apiStatusTv.setPadding(0, dp(4), 0, dp(8));
+        apiCard.addView(apiStatusTv);
+
+        final EditText emailInput = new EditText(this);
+        emailInput.setHint("Email от аккаунта IdleArc");
+        emailInput.setHintTextColor(0xFF6B7280);
+        emailInput.setTextColor(0xFFF9FAFB);
+        emailInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        emailInput.setSingleLine(true);
+        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        emailInput.setText(IdleArcApiClient.getSavedEmail(this));
+        emailInput.setPadding(dp(10), dp(8), dp(10), dp(8));
+        GradientDrawable emBg = new GradientDrawable();
+        emBg.setColor(0xFF0F172A);
+        emBg.setCornerRadius(dp(10));
+        emBg.setStroke(dp(1), 0xFF334155);
+        emailInput.setBackground(emBg);
+        apiCard.addView(emailInput);
+
+        final EditText passInput = new EditText(this);
+        passInput.setHint(IdleArcApiClient.hasSavedCredentials(this)
+                ? "Пароль сохранён локально (оставь пустым или введи заново)"
+                : "Пароль от аккаунта IdleArc");
+        passInput.setHintTextColor(0xFF6B7280);
+        passInput.setTextColor(0xFFF9FAFB);
+        passInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+        passInput.setSingleLine(true);
+        passInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passInput.setPadding(dp(10), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams pwLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pwLp.topMargin = dp(6);
+        passInput.setLayoutParams(pwLp);
+        GradientDrawable pwBg = new GradientDrawable();
+        pwBg.setColor(0xFF0F172A);
+        pwBg.setCornerRadius(dp(10));
+        pwBg.setStroke(dp(1), 0xFF334155);
+        passInput.setBackground(pwBg);
+        apiCard.addView(passInput);
+
+        TextView syncApiBtn = makeBigButton("🌐 Синхронизировать героя (31 стат + 10 вещей + 20 камней)", 0xFF0284C7, 0xFFFFFFFF);
+        LinearLayout.LayoutParams syncLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        syncLp.topMargin = dp(8);
+        syncApiBtn.setLayoutParams(syncLp);
+        syncApiBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String em = emailInput.getText() != null ? emailInput.getText().toString().trim() : "";
+                String pw = passInput.getText() != null ? passInput.getText().toString() : "";
+                if (!em.isEmpty() && !pw.isEmpty()) {
+                    IdleArcApiClient.saveCredentials(MainActivity.this, em, pw, "");
+                    passInput.setText("");
+                    passInput.setHint("Пароль сохранён локально");
+                }
+                triggerMainApiSync();
+            }
+        });
+        apiCard.addView(syncApiBtn);
+
+        TextView clearApiBtn = makeBigButton("🗑️ Удалить сохранённый логин API с устройства", 0xFF1E293B, 0xFF94A3B8);
+        LinearLayout.LayoutParams clrLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clrLp.topMargin = dp(6);
+        clearApiBtn.setLayoutParams(clrLp);
+        clearApiBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                IdleArcApiClient.clearCredentials(MainActivity.this);
+                emailInput.setText("");
+                passInput.setText("");
+                passInput.setHint("Пароль от аккаунта IdleArc");
+                apiStatusTv.setText("Локальные данные API удалены.");
+                apiStatusTv.setTextColor(0xFF9CA3AF);
+                if (apiReportTv != null) apiReportTv.setVisibility(View.GONE);
+                refreshDynamicCards();
+            }
+        });
+        apiCard.addView(clearApiBtn);
+
+        apiReportTv = new TextView(this);
+        apiReportTv.setTextColor(0xFFE5E7EB);
+        apiReportTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.1f);
+        apiReportTv.setLineSpacing(dp(2), 1.08f);
+        apiReportTv.setPadding(0, dp(10), 0, 0);
+        apiReportTv.setVisibility(View.GONE);
+        apiCard.addView(apiReportTv);
+
+        root.addView(apiCard);
 
         // Переключатель сборки + Карточка «💎 Гнёзда и Самоцветы»
         LinearLayout gemCard = makeCard(0xFF172226, 0xFF34D399);
@@ -325,7 +452,9 @@ public class MainActivity extends Activity {
                     mainSlotChips[j].setBackground(gd);
                     mainSlotChips[j].setTextColor(sel ? 0xFFFFFFFF : 0xFFD1D5DB);
                 }
-                slotDetailTv.setText(SlotAffixAdvisor.formatSlotGuide(gs, profile));
+                String apiSlot = IdleArcApiClient.buildEquippedSlotDetailFromCache(gs, profile);
+                String baseGuide = SlotAffixAdvisor.formatSlotGuide(gs, profile);
+                slotDetailTv.setText(apiSlot != null ? (apiSlot + "\n\n" + baseGuide) : baseGuide);
             });
             mainSlotChips[i] = chip;
             mainSlotRow.addView(chip);
@@ -411,6 +540,49 @@ public class MainActivity extends Activity {
         setContentView(scroll);
         updatePermissionBanner();
         refreshDynamicCards();
+    }
+
+    private void triggerMainApiSync() {
+        if (apiBusy) return;
+        apiBusy = true;
+        if (apiStatusTv != null) {
+            apiStatusTv.setText("⏳ Подключение к https://idlearc.com/api/dashboard...");
+            apiStatusTv.setTextColor(0xFF93C5FD);
+        }
+        IdleArcApiClient.syncAsync(this, profile, new IdleArcApiClient.ApiCallback() {
+            @Override
+            public void onSuccess(final ScreenAnalyzer.ScanResult scanResult) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        apiBusy = false;
+                        if (apiStatusTv != null) {
+                            apiStatusTv.setText("✅ " + scanResult.headline + " · Переключай режимы и слоты ниже!");
+                            apiStatusTv.setTextColor(0xFF6EE7B7);
+                        }
+                        if (apiReportTv != null) {
+                            apiReportTv.setText(scanResult.details);
+                            apiReportTv.setVisibility(View.VISIBLE);
+                        }
+                        refreshDynamicCards();
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String errorMessage) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        apiBusy = false;
+                        if (apiStatusTv != null) {
+                            apiStatusTv.setText("❌ " + errorMessage);
+                            apiStatusTv.setTextColor(0xFFFCA5A5);
+                        }
+                    }
+                });
+            }
+        });
     }
 
     private void runOtaCheck(final boolean silentStartup) {
