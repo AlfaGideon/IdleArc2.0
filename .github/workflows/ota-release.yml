@@ -55,32 +55,39 @@ jobs:
           echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
           echo "apk_name=IdleArc-DruidHelper-v${VER_NAME}.apk" >> "$GITHUB_OUTPUT"
 
-      - name: Build & sign APK with GitHub Secrets
+      - name: Verify or build signed APK with GitHub Secrets
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          OTA_APK_URL: "https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version_name }}/${{ steps.ver.outputs.apk_name }}"
+          OTA_APK_URL: "https://raw.githubusercontent.com/${{ github.repository }}/v${{ steps.ver.outputs.version_name }}/releases/${{ steps.ver.outputs.apk_name }}"
           OTA_CHANGELOG: ${{ inputs.changelog }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "::error::Secret ANDROID_KEYSTORE_BASE64 is not set in GitHub Repository Secrets!"
             exit 1
           fi
-          python3 tools/build_companion_apk.py
+          APK_PATH="releases/${{ steps.ver.outputs.apk_name }}"
+          if [ -f "$APK_PATH" ] && [ -z "${OTA_CHANGELOG}" ]; then
+            echo "Found pre-built signed $APK_PATH in commit — verifying integrity & SHA-256..."
+            python3 -c 'import hashlib, json, pathlib, sys; m = json.loads(pathlib.Path("releases/ota-manifest.json").read_text("utf-8")); sha = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest(); sys.exit(0 if sha.lower() == m.get("sha256", "").lower() else 1)' "$APK_PATH"
+          else
+            python3 tools/build_companion_apk.py
+          fi
           python3 tools/inspect_apk.py "releases/${{ steps.ver.outputs.apk_name }}" --output /tmp/ota_inventory.json
 
-      - name: Publish GitHub Release (OTA endpoint)
+      - name: Publish GitHub Release & Git Tag (OTA endpoint)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ steps.ver.outputs.version_name }}"
           APK_FILE="releases/${{ steps.ver.outputs.apk_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK_FILE" "releases/ota-manifest.json" --clobber
+            gh release upload "$TAG" "$APK_FILE" --clobber
           else
-            gh release create "$TAG" "$APK_FILE" "releases/ota-manifest.json" \
+            gh release create "$TAG" "$APK_FILE" \
+              --target "${{ github.sha }}" \
               --title "IdleArc Druid Helper ${TAG}" \
               --notes "Подписанный OTA-релиз ${TAG} (versionCode ${{ steps.ver.outputs.version_code }})."
           fi

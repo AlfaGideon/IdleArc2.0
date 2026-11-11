@@ -52,15 +52,22 @@ public class OtaUpdater {
         public final String sha256;
         public final long sizeBytes;
         public final String changelog;
+        public final String sourceBranch;
 
         public ReleaseInfo(int versionCode, String versionName, String apkUrl,
                            String sha256, long sizeBytes, String changelog) {
+            this(versionCode, versionName, apkUrl, sha256, sizeBytes, changelog, "");
+        }
+
+        public ReleaseInfo(int versionCode, String versionName, String apkUrl,
+                           String sha256, long sizeBytes, String changelog, String sourceBranch) {
             this.versionCode = versionCode;
             this.versionName = versionName;
             this.apkUrl = apkUrl;
             this.sha256 = sha256 != null ? sha256.trim().toLowerCase(Locale.ROOT) : "";
             this.sizeBytes = sizeBytes;
             this.changelog = changelog != null ? changelog.trim() : "";
+            this.sourceBranch = sourceBranch != null ? sourceBranch.trim() : "";
         }
     }
 
@@ -158,7 +165,7 @@ public class OtaUpdater {
                             + "/" + branch + "/releases/ota-manifest.json?t=" + cacheBust;
                     try {
                         String body = httpGetText(url);
-                        ReleaseInfo info = parseManifestJson(body);
+                        ReleaseInfo info = parseManifestJson(body, branch);
                         best = pickNewer(best, info);
                     } catch (Exception e) {
                         if (lastErr == null) lastErr = e.getMessage();
@@ -189,17 +196,20 @@ public class OtaUpdater {
         if (cand.versionCode != cur.versionCode) {
             return cand.versionCode > cur.versionCode ? cand : cur;
         }
-        // При одинаковом versionCode предпочитаем запись с заполненной контрольной суммой SHA-256 и ссылкой на GitHub Releases
+        // При одинаковом versionCode предпочитаем запись с заполненной контрольной суммой SHA-256 и прямым зеркалом raw.githubusercontent.com
         if (cur.sha256.isEmpty() && !cand.sha256.isEmpty()) return cand;
-        if (!cur.apkUrl.contains("/releases/download/") && cand.apkUrl.contains("/releases/download/")) return cand;
+        if (!cand.sha256.isEmpty() && !cur.apkUrl.contains("raw.githubusercontent.com") && cand.apkUrl.contains("raw.githubusercontent.com")) {
+            return cand;
+        }
         return cur;
     }
 
-    /** Скачивает APK (с автоматическим перебором резервных зеркал GitHub), проверяет SHA-256 и запускает установку */
+    /** Скачивает APK (с автоматическим перебором зеркал raw.githubusercontent.com и GitHub Releases), проверяет SHA-256 и запускает установку */
     public static void downloadUpdateAsync(final Activity activity,
                                            final ReleaseInfo info,
                                            final DownloadCallback cb) {
         final String repoSlug = activity.getString(R.string.ota_github_repo);
+        final String activeBranch = activity.getString(R.string.ota_active_branch);
         final Handler ui = new Handler(Looper.getMainLooper());
         new Thread(new Runnable() {
             @Override
@@ -209,7 +219,8 @@ public class OtaUpdater {
                 File partFile = new File(otaDir, "IdleArc-DruidHelper-update.apk.part");
                 File finalApk = new File(otaDir, "IdleArc-DruidHelper-v" + safeVer + ".apk");
 
-                List<String> candidateUrls = buildCandidateApkUrls(info, repoSlug, safeVer);
+                List<String> candidateUrls = buildCandidateApkUrls(info, repoSlug, safeVer, activeBranch);
+                Exception primaryErr = null;
                 Exception lastDownloadErr = null;
                 boolean downloadedOk = false;
 
@@ -262,6 +273,7 @@ public class OtaUpdater {
                         downloadedOk = true;
                         break;
                     } catch (Exception e) {
+                        if (primaryErr == null) primaryErr = e;
                         lastDownloadErr = e;
                         //noinspection ResultOfMethodCallIgnored
                         partFile.delete();
@@ -271,8 +283,9 @@ public class OtaUpdater {
                 }
 
                 if (!downloadedOk) {
-                    final String msg = lastDownloadErr != null && lastDownloadErr.getMessage() != null
-                            ? lastDownloadErr.getMessage()
+                    Exception chosen = primaryErr != null ? primaryErr : lastDownloadErr;
+                    final String msg = chosen != null && chosen.getMessage() != null
+                            ? chosen.getMessage()
                             : "Ошибка загрузки обновления";
                     ui.post(new Runnable() {
                         @Override
@@ -308,14 +321,25 @@ public class OtaUpdater {
         }, "OtaDownloadThread").start();
     }
 
-    private static List<String> buildCandidateApkUrls(ReleaseInfo info, String repoSlug, String safeVer) {
+    private static List<String> buildCandidateApkUrls(ReleaseInfo info, String repoSlug, String safeVer, String activeBranch) {
         Set<String> urls = new LinkedHashSet<>();
+        String apkName = "IdleArc-DruidHelper-v" + safeVer + ".apk";
+        // Сначала пробуем прямые зеркала raw.githubusercontent.com (не редиректят на блокируемый в РФ blob.core.windows.net!)
+        if (info.apkUrl != null && info.apkUrl.contains("raw.githubusercontent.com")) {
+            urls.add(info.apkUrl.trim());
+        }
+        urls.add("https://raw.githubusercontent.com/" + repoSlug + "/v" + safeVer + "/releases/" + apkName);
+        if (info.sourceBranch != null && !info.sourceBranch.isEmpty()) {
+            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + info.sourceBranch + "/releases/" + apkName);
+        }
+        if (activeBranch != null && !activeBranch.trim().isEmpty()) {
+            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + activeBranch.trim() + "/releases/" + apkName);
+        }
+        urls.add("https://raw.githubusercontent.com/" + repoSlug + "/main/releases/" + apkName);
         if (info.apkUrl != null && !info.apkUrl.trim().isEmpty()) {
             urls.add(info.apkUrl.trim());
         }
-        String apkName = "IdleArc-DruidHelper-v" + safeVer + ".apk";
         urls.add("https://github.com/" + repoSlug + "/releases/download/v" + safeVer + "/" + apkName);
-        urls.add("https://raw.githubusercontent.com/" + repoSlug + "/main/releases/" + apkName);
         return new ArrayList<>(urls);
     }
 
@@ -353,6 +377,10 @@ public class OtaUpdater {
     }
 
     static ReleaseInfo parseManifestJson(String rawJson) throws Exception {
+        return parseManifestJson(rawJson, "");
+    }
+
+    static ReleaseInfo parseManifestJson(String rawJson, String sourceBranch) throws Exception {
         JSONObject obj = new JSONObject(rawJson);
         int code = obj.getInt("versionCode");
         String name = obj.getString("versionName");
@@ -361,7 +389,7 @@ public class OtaUpdater {
         long size = obj.optLong("sizeBytes", 0L);
         String log = obj.optString("changelog", "");
         if (code <= 0 || url.isEmpty()) return null;
-        return new ReleaseInfo(code, name, url, sha, size, log);
+        return new ReleaseInfo(code, name, url, sha, size, log, sourceBranch);
     }
 
     static ReleaseInfo parseGitHubReleaseJson(String rawJson) throws Exception {

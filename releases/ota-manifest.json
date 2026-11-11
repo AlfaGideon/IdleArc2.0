@@ -1,8 +1,8 @@
 {
-  "versionCode": 220,
-  "versionName": "2.2.0",
-  "apkUrl": "https://github.com/AlfaGideon/IdleArc2.0/releases/download/v2.2.0/IdleArc-DruidHelper-v2.2.0.apk",
-  "sha256": "da4ff4100a6f190470233fdfd60de8656d1c44437e560a8794caac1560d98fe6",
-  "sizeBytes": 262870,
-  "changelog": "v2.2.0: 1) Добавлена прямая синхронизация с официальным API игры (https://idlearc.com/api/dashboard) в 1 клик (кнопка «🌐 API» прямо в виджете и в главном окне): за 0.4 сек загружает все 31 стат, все 10 надетых предметов, сумку, все 20 гнёзд/самоцветов, 4 питомцев, талисманы и навыки с 0% погрешности OCR; 2) Мгновенный пересчёт всех 10 вещей и 20 камней при переключении режимов (Пуш / Боссы / Фарм / 1→Кап); 3) Во вкладке «Слоты» сразу показывается живой разбор надетой на тебе вещи с сервера."
+  "versionCode": 221,
+  "versionName": "2.2.1",
+  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v2.2.1/releases/IdleArc-DruidHelper-v2.2.1.apk",
+  "sha256": "bfe37845370c75b6073eda2b3909cc880990f72c248a72f1d9c6f6884cefda4d",
+  "sizeBytes": 262869,
+  "changelog": "v2.2.1: 1) Исправлено скачивание OTA-обновлений в РФ без VPN (прямая раздача через raw.githubusercontent.com без редиректа на блокируемый blob.core.windows.net и без рассинхрона SHA-256); 2) Прямая синхронизация с официальным API игры (https://idlearc.com/api/dashboard) в 1 клик («🌐 API»): все 31 стат, все 10 надетых предметов, все 20 камней, питомцы и талисманы с 0% погрешности OCR."
 }

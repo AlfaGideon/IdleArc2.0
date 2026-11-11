@@ -669,12 +669,13 @@ public class MainActivity extends Activity {
             @Override
             public void onError(String message) {
                 otaBusy = false;
+                availableRelease = null;
                 if (otaStatusTv != null) {
                     otaStatusTv.setText("❌ Ошибка обновления: " + message);
                     otaStatusTv.setTextColor(0xFFFCA5A5);
                 }
                 if (otaActionBtn != null) {
-                    otaActionBtn.setText("🔄 Повторить скачивание v" + rel.versionName);
+                    otaActionBtn.setText("🔄 Повторить проверку и скачивание v" + rel.versionName);
                 }
             }
         });

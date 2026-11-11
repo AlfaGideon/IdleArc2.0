@@ -36,11 +36,10 @@ OUT_DIR = ROOT / "releases"
 TOOLS_DIR = Path(os.environ.get("ANDROID_TOOLS_DIR", "/tmp/android-tools"))
 
 DEFAULT_CHANGELOG = (
-    "v2.2.0: 1) Добавлена прямая синхронизация с официальным API игры (https://idlearc.com/api/dashboard) "
-    "в 1 клик (кнопка «🌐 API» прямо в виджете и в главном окне): за 0.4 сек загружает все 31 стат, "
-    "все 10 надетых предметов, сумку, все 20 гнёзд/самоцветов, 4 питомцев, талисманы и навыки с 0% погрешности OCR; "
-    "2) Мгновенный пересчёт всех 10 вещей и 20 камней при переключении режимов (Пуш / Боссы / Фарм / 1→Кап); "
-    "3) Во вкладке «Слоты» сразу показывается живой разбор надетой на тебе вещи с сервера."
+    "v2.2.1: 1) Исправлено скачивание OTA-обновлений в РФ без VPN (прямая раздача через raw.githubusercontent.com "
+    "без редиректа на блокируемый blob.core.windows.net и без рассинхрона SHA-256); "
+    "2) Прямая синхронизация с официальным API игры (https://idlearc.com/api/dashboard) в 1 клик («🌐 API»): "
+    "все 31 стат, все 10 надетых предметов, все 20 камней, питомцы и талисманы с 0% погрешности OCR."
 )
 
 
@@ -263,7 +262,7 @@ def build_apk() -> Path:
         repo_slug = os.environ.get("GITHUB_REPOSITORY", "AlfaGideon/IdleArc2.0")
         ota_apk_url = os.environ.get(
             "OTA_APK_URL",
-            f"https://github.com/{repo_slug}/releases/download/v{ver_name}/{apk_filename}",
+            f"https://raw.githubusercontent.com/{repo_slug}/v{ver_name}/releases/{apk_filename}",
         )
         changelog = os.environ.get("OTA_CHANGELOG") or DEFAULT_CHANGELOG
         manifest_payload = {
