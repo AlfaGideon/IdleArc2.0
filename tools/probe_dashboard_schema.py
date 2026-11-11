@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-Safe schema discovery for https://idlearc.com/api/dashboard (Laravel Sanctum / Inertia flow).
+Safe schema discovery for https://idlearc.com/api/dashboard (Bearer token + web session).
 Strictly redacts all credentials, cookies, tokens, emails, character/guild names, and IDs.
 """
 from __future__ import annotations
 
-import http.cookiejar
 import json
 import os
 import re
 import traceback
-import urllib.error
 import urllib.parse
-import urllib.request
 
 
 BASE = "https://idlearc.com"
@@ -41,7 +38,7 @@ def scrub(obj, parent_key: str = "", depth: int = 0):
         kl = parent_key.lower()
         if kl in SENSITIVE_EXACT_KEYS or any(w in kl for w in ("token", "secret", "password", "email", "cookie")):
             return "<REDACTED>"
-        if "@" in obj or re.match(r"^[A-Za-z0-9_-]{28,}$", obj):
+        if "@" in obj or re.match(r"^[A-Za-z0-9|_-]{28,}$", obj):
             return "<REDACTED_STR>"
         if kl in ("name", "nickname", "tag") and depth <= 3:
             return "<REDACTED_NAME>"
@@ -79,60 +76,87 @@ def emit_notice(title: str, body: str) -> None:
 
 
 def run_probe() -> None:
-    import requests  # preinstalled on ubuntu-latest
+    import requests
 
     email = os.environ.get("IDLEARC_EMAIL", "").strip()
     password = os.environ.get("IDLEARC_PASSWORD", "")
-    lines: list[str] = [f"email_len={len(email)} pass_len={len(password)}"]
+    lines: list[str] = []
 
     s = requests.Session()
     s.headers.update({
         "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     })
 
-    r0 = s.get(f"{BASE}/login", timeout=20)
-    xsrf = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
-    lines.append(f"GET_login={r0.status_code} cookies={list(s.cookies.keys())} xsrf_len={len(xsrf)}")
-
-    # Inertia / Laravel login POST (allow_redirects=False so we see exact status & Set-Cookie!)
-    r_login = s.post(
-        f"{BASE}/login",
-        json={"email": email, "password": password, "remember": True},
-        headers={
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-            "X-XSRF-TOKEN": xsrf,
-            "Origin": BASE,
-            "Referer": f"{BASE}/login",
-        },
-        allow_redirects=False,
-        timeout=20,
-    )
-    loc = r_login.headers.get("Location", "") or r_login.headers.get("X-Inertia-Location", "")
-    lines.append(f"POST_login={r_login.status_code} loc={loc} cookies_now={list(s.cookies.keys())}")
-    if r_login.status_code >= 400:
-        # Print safe error keys only (no personal info)
+    # A) Try direct mobile/API token endpoints first!
+    bearer_token = ""
+    for ep in ["/api/login", "/api/auth/login", "/api/v1/login", "/api/sanctum/token"]:
         try:
-            ej = r_login.json()
-            lines.append(f"POST_login_err={scrub(ej)}")
-        except Exception:
-            lines.append(f"POST_login_body_head={r_login.text[:160]}")
+            ra = s.post(
+                f"{BASE}{ep}",
+                json={"email": email, "password": password, "device_name": "DruidHelper"},
+                headers={"Accept": "application/json"},
+                timeout=15,
+            )
+            lines.append(f"POST {ep} -> {ra.status_code} ct={ra.headers.get('Content-Type', '')}")
+            if ra.status_code in (200, 201):
+                aj = ra.json()
+                lines.append(f"  {ep} keys={list(aj.keys()) if isinstance(aj, dict) else type(aj).__name__}")
+                if isinstance(aj, dict):
+                    for tk in ("token", "access_token", "bearer_token", "api_token"):
+                        if isinstance(aj.get(tk), str) and aj[tk]:
+                            bearer_token = aj[tk]
+                            break
+                    if not bearer_token and isinstance(aj.get("data"), dict):
+                        for tk in ("token", "access_token"):
+                            if isinstance(aj["data"].get(tk), str):
+                                bearer_token = aj["data"][tk]
+                                break
+                if bearer_token:
+                    break
+        except Exception as e:
+            lines.append(f"POST {ep} err={e}")
 
-    xsrf2 = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
-    r_dash = s.get(
-        f"{BASE}/api/dashboard",
-        headers={
-            "Accept": "application/json",
-            "X-Requested-With": "XMLHttpRequest",
-            "X-XSRF-TOKEN": xsrf2,
-            "Referer": f"{BASE}/app/",
-        },
-        timeout=25,
-    )
-    lines.append(f"GET_dashboard={r_dash.status_code} ct={r_dash.headers.get('Content-Type', '')} bytes={len(r_dash.content)}")
+    # B) Also do web login and inspect /app/ + main.dart.js if needed
+    if not bearer_token:
+        r0 = s.get(f"{BASE}/login", timeout=15)
+        xsrf = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
+        s.post(
+            f"{BASE}/login",
+            json={"email": email, "password": password, "remember": True},
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+                "X-XSRF-TOKEN": xsrf,
+                "Origin": BASE,
+                "Referer": f"{BASE}/login",
+            },
+            allow_redirects=True,
+            timeout=15,
+        )
+        # Check logged-in homepage / profile / app HTML for token exchange routes
+        for page_ep in ["/", "/dashboard", "/profile", "/app/"]:
+            rp = s.get(f"{BASE}{page_ep}", allow_redirects=True, timeout=15)
+            api_mentions = sorted(set(re.findall(r"['\"](/[a-zA-Z0-9_/-]*api[a-zA-Z0-9_/-]*|/web[a-zA-Z0-9_/-]*|/token[a-zA-Z0-9_/-]*)['\"]", rp.text)))
+            lines.append(f"GET {page_ep} -> {rp.status_code} url={rp.url} mentions={api_mentions[:15]}")
+
+        # Search main.dart.js for 'dashboard' and 'login' context
+        rjs = s.get(f"{BASE}/app/main.dart.js", timeout=25)
+        dash_hits = re.findall(r'.{0,55}dashboard.{0,55}', rjs.text)
+        auth_hits = re.findall(r'["\'](?:api/)?(?:auth|login|session|web-session|token)[a-zA-Z0-9_/-]*["\']', rjs.text)
+        lines.append(f"JS auth_hits={sorted(set(auth_hits))[:30]}")
+        lines.append(f"JS dash_hits={dash_hits[:12]}")
+
+    # C) Call /api/dashboard (with Bearer if found!)
+    hdrs = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+    if bearer_token:
+        hdrs["Authorization"] = f"Bearer {bearer_token}"
+        lines.append(f"Got Bearer token! (len={len(bearer_token)})")
+
+    r_dash = s.get(f"{BASE}/api/dashboard", headers=hdrs, timeout=25)
+    lines.append(f"GET /api/dashboard -> {r_dash.status_code} bytes={len(r_dash.content)}")
 
     if r_dash.status_code != 200:
-        lines.append(f"Dash_non200={r_dash.text[:250]}")
+        lines.append(f"Dash_body={r_dash.text[:200]}")
         emit_notice("Overview", "\n".join(lines)[:3800])
         return
 
