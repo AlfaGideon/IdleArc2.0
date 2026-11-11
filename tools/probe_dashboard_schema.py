@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Safe schema discovery for https://idlearc.com/api/dashboard (Laravel Sanctum XSRF flow).
+Safe schema discovery for https://idlearc.com/api/dashboard (Laravel Sanctum / Inertia flow).
 Strictly redacts all credentials, cookies, tokens, emails, character/guild names, and IDs.
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ import http.cookiejar
 import json
 import os
 import re
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -77,60 +78,48 @@ def emit_notice(title: str, body: str) -> None:
     print(f"::notice title={title}::{escaped}")
 
 
-def main() -> int:
+def run_probe() -> None:
+    import requests  # preinstalled on ubuntu-latest
+
     email = os.environ.get("IDLEARC_EMAIL", "").strip()
     password = os.environ.get("IDLEARC_PASSWORD", "")
-    if not email or not password:
-        emit_notice("ProbeError", "Missing secrets")
-        return 1
+    lines: list[str] = [f"email_len={len(email)} pass_len={len(password)}"]
 
-    cj = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    ua = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    })
 
-    def get_xsrf() -> str:
-        for c in cj:
-            if c.name == "XSRF-TOKEN":
-                return urllib.parse.unquote(c.value)
-        return ""
+    r0 = s.get(f"{BASE}/login", timeout=20)
+    xsrf = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
+    lines.append(f"GET_login={r0.status_code} cookies={list(s.cookies.keys())} xsrf_len={len(xsrf)}")
 
-    def req(url: str, data: bytes | None = None, headers: dict | None = None, method: str | None = None):
-        hdrs = {"User-Agent": ua}
-        if headers:
-            hdrs.update(headers)
-        r = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-        return opener.open(r, timeout=25)
+    # Inertia / Laravel login POST (allow_redirects=False so we see exact status & Set-Cookie!)
+    r_login = s.post(
+        f"{BASE}/login",
+        json={"email": email, "password": password, "remember": True},
+        headers={
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "X-XSRF-TOKEN": xsrf,
+            "Origin": BASE,
+            "Referer": f"{BASE}/login",
+        },
+        allow_redirects=False,
+        timeout=20,
+    )
+    loc = r_login.headers.get("Location", "") or r_login.headers.get("X-Inertia-Location", "")
+    lines.append(f"POST_login={r_login.status_code} loc={loc} cookies_now={list(s.cookies.keys())}")
+    if r_login.status_code >= 400:
+        # Print safe error keys only (no personal info)
+        try:
+            ej = r_login.json()
+            lines.append(f"POST_login_err={scrub(ej)}")
+        except Exception:
+            lines.append(f"POST_login_body_head={r_login.text[:160]}")
 
-    lines: list[str] = []
-
-    # Step 1: GET /login to obtain XSRF-TOKEN & idlearc_session
-    req(f"{BASE}/login", headers={"Accept": "text/html,application/xhtml+xml"})
-    xsrf = get_xsrf()
-    lines.append(f"Got_XSRF={bool(xsrf)} len={len(xsrf)}")
-
-    # Step 2: POST /login with X-XSRF-TOKEN + JSON body
-    login_body = json.dumps({"email": email, "password": password, "remember": True}).encode("utf-8")
-    try:
-        post_resp = req(
-            f"{BASE}/login",
-            data=login_body,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
-                "X-XSRF-TOKEN": xsrf,
-                "Origin": BASE,
-                "Referer": f"{BASE}/login",
-            },
-            method="POST",
-        )
-        lines.append(f"POST_login_status={post_resp.status} final_url={post_resp.geturl()}")
-    except urllib.error.HTTPError as e:
-        lines.append(f"POST_login_HTTP={e.code}")
-
-    # Step 3: GET /api/dashboard
-    xsrf2 = get_xsrf()
-    dash_resp = req(
+    xsrf2 = urllib.parse.unquote(s.cookies.get("XSRF-TOKEN", ""))
+    r_dash = s.get(
         f"{BASE}/api/dashboard",
         headers={
             "Accept": "application/json",
@@ -138,16 +127,21 @@ def main() -> int:
             "X-XSRF-TOKEN": xsrf2,
             "Referer": f"{BASE}/app/",
         },
+        timeout=25,
     )
-    raw = dash_resp.read().decode("utf-8", errors="replace")
-    lines.append(f"GET_dashboard_status={dash_resp.status} bytes={len(raw)}")
+    lines.append(f"GET_dashboard={r_dash.status_code} ct={r_dash.headers.get('Content-Type', '')} bytes={len(r_dash.content)}")
 
-    data = json.loads(raw)
+    if r_dash.status_code != 200:
+        lines.append(f"Dash_non200={r_dash.text[:250]}")
+        emit_notice("Overview", "\n".join(lines)[:3800])
+        return
+
+    data = r_dash.json()
     if isinstance(data, dict):
         lines.append(f"TopKeys={list(data.keys())}")
         for k, v in data.items():
             if isinstance(v, dict):
-                lines.append(f"  dict[{k}] ({len(v)} keys): {list(v.keys())[:50]}")
+                lines.append(f"  dict[{k}] ({len(v)} keys): {list(v.keys())[:55]}")
                 for sk, sv in list(v.items())[:25]:
                     if isinstance(sv, dict):
                         lines.append(f"    dict[{k}.{sk}] ({len(sv)} keys): {list(sv.keys())[:35]}")
@@ -162,7 +156,6 @@ def main() -> int:
 
     emit_notice("Overview", "\n".join(lines)[:3800])
 
-    # Emit detailed scrubbed subsections (up to 8 notices,GitHub caps annotations per step at 10!)
     if isinstance(data, dict):
         idx = 1
         for k, v in data.items():
@@ -172,8 +165,9 @@ def main() -> int:
             emit_notice(f"Key_{idx}_{k}", sub_str[:3500])
             idx += 1
 
-    return 0
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        run_probe()
+    except Exception as exc:
+        emit_notice("ProbeException", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-800:]}")
