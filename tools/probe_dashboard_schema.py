@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-Safe schema & endpoint discovery for https://idlearc.com/api/dashboard.
-Strictly redacts all credentials, cookies, tokens, emails, user/character names, and account IDs,
-and emits sanitized schema chunks via GitHub Actions ::notice:: annotations.
+Safe schema discovery for https://idlearc.com/api/dashboard (Laravel Sanctum XSRF flow).
+Strictly redacts all credentials, cookies, tokens, emails, character/guild names, and IDs.
 """
 from __future__ import annotations
 
-import html.parser
 import http.cookiejar
 import json
 import os
@@ -25,59 +23,12 @@ SENSITIVE_EXACT_KEYS = {
     "ip", "ip_address", "last_ip", "stripe_customer_id", "subscription_id",
     "google_id", "apple_id", "discord_id", "user_id", "account_id", "owner_id",
     "username", "display_name", "character_name", "hero_name", "player_name", "guild_name",
-    "referral_code", "invite_code", "friend_code", "code", "uid", "uuid",
+    "referral_code", "invite_code", "friend_code", "uid", "uuid",
 }
 
 
-class LoginPageParser(html.parser.HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.forms: list[dict] = []
-        self._cur_form: dict | None = None
-        self.meta: dict[str, str] = {}
-        self.scripts: list[str] = []
-        self._in_script = False
-        self._script_buf: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        ad = {k.lower(): (v or "") for k, v in attrs}
-        t = tag.lower()
-        if t == "form":
-            self._cur_form = {"action": ad.get("action", ""), "method": ad.get("method", "get").upper(), "inputs": []}
-            self.forms.append(self._cur_form)
-        elif t == "input":
-            inp = {
-                "name": ad.get("name", ""),
-                "type": ad.get("type", "text"),
-                "value": ad.get("value", ""),
-                "id": ad.get("id", ""),
-            }
-            if self._cur_form is not None:
-                self._cur_form["inputs"].append(inp)
-        elif t == "meta":
-            n = ad.get("name", "") or ad.get("property", "")
-            if n:
-                self.meta[n] = ad.get("content", "")
-        elif t == "script":
-            src = ad.get("src", "")
-            if src:
-                self.scripts.append(f"SRC:{src}")
-            else:
-                self._in_script = True
-                self._script_buf = []
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "script" and self._in_script:
-            self._in_script = False
-            self.scripts.append("INLINE:" + "".join(self._script_buf))
-
-    def handle_data(self, data: str) -> None:
-        if self._in_script:
-            self._script_buf.append(data)
-
-
 def scrub(obj, parent_key: str = "", depth: int = 0):
-    if depth > 12:
+    if depth > 14:
         return "<MAX_DEPTH>"
     if obj is None or isinstance(obj, bool):
         return obj
@@ -89,9 +40,9 @@ def scrub(obj, parent_key: str = "", depth: int = 0):
         kl = parent_key.lower()
         if kl in SENSITIVE_EXACT_KEYS or any(w in kl for w in ("token", "secret", "password", "email", "cookie")):
             return "<REDACTED>"
-        if "@" in obj or re.match(r"^[A-Za-z0-9_-]{24,}$", obj):
+        if "@" in obj or re.match(r"^[A-Za-z0-9_-]{28,}$", obj):
             return "<REDACTED_STR>"
-        if kl in ("name", "title", "tag", "nickname") and depth <= 4:
+        if kl in ("name", "nickname", "tag") and depth <= 3:
             return "<REDACTED_NAME>"
         if len(obj) > 100:
             return obj[:100] + "...<TRUNC>"
@@ -105,14 +56,14 @@ def scrub(obj, parent_key: str = "", depth: int = 0):
     if isinstance(obj, dict):
         out = {}
         keys = list(obj.keys())
-        for k in keys[:60]:
+        for k in keys[:80]:
             ks = str(k)
             if ks.lower() in SENSITIVE_EXACT_KEYS:
                 out[ks] = "<REDACTED>"
             else:
                 out[ks] = scrub(obj[k], ks, depth + 1)
-        if len(keys) > 60:
-            out["__more_keys__"] = f"{len(keys) - 60} more keys"
+        if len(keys) > 80:
+            out["__more_keys__"] = f"{len(keys) - 80} more keys"
         return out
     return str(type(obj))
 
@@ -130,139 +81,96 @@ def main() -> int:
     email = os.environ.get("IDLEARC_EMAIL", "").strip()
     password = os.environ.get("IDLEARC_PASSWORD", "")
     if not email or not password:
-        emit_notice("ProbeError", "IDLEARC_EMAIL or IDLEARC_PASSWORD is empty")
+        emit_notice("ProbeError", "Missing secrets")
         return 1
 
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     ua = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
+    def get_xsrf() -> str:
+        for c in cj:
+            if c.name == "XSRF-TOKEN":
+                return urllib.parse.unquote(c.value)
+        return ""
+
     def req(url: str, data: bytes | None = None, headers: dict | None = None, method: str | None = None):
-        hdrs = {"User-Agent": ua, "Accept": "text/html,application/json,*/*;q=0.9"}
+        hdrs = {"User-Agent": ua}
         if headers:
             hdrs.update(headers)
         r = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         return opener.open(r, timeout=25)
 
-    report_lines: list[str] = []
+    lines: list[str] = []
 
-    resp = req(f"{BASE}/login")
-    login_html = resp.read().decode("utf-8", errors="replace")
-    parser = LoginPageParser()
-    parser.feed(login_html)
+    # Step 1: GET /login to obtain XSRF-TOKEN & idlearc_session
+    req(f"{BASE}/login", headers={"Accept": "text/html,application/xhtml+xml"})
+    xsrf = get_xsrf()
+    lines.append(f"Got_XSRF={bool(xsrf)} len={len(xsrf)}")
 
-    report_lines.append(f"Cookies_GET_login={[c.name for c in cj]}")
-    report_lines.append(f"Meta={list(parser.meta.keys())}")
-    for idx, f in enumerate(parser.forms):
-        safe_inputs = [{"name": i["name"], "type": i["type"], "has_val": bool(i["value"])} for i in f["inputs"]]
-        report_lines.append(f"Form#{idx}: method={f['method']} action={f['action']} inputs={safe_inputs}")
-    for sc in parser.scripts:
-        if sc.startswith("SRC:"):
-            report_lines.append(f"Script={sc}")
-        else:
-            api_refs = re.findall(r"['\"](/api/[^'\"]+|/login[^'\"]*)['\"]", sc)
-            if api_refs:
-                report_lines.append(f"InlineRefs={api_refs}")
-
-    form_action = "/login"
-    payload_dict: dict[str, str] = {}
-    csrf_val = ""
-    if parser.forms:
-        f0 = parser.forms[0]
-        if f0["action"]:
-            form_action = f0["action"]
-        for inp in f0["inputs"]:
-            nm = inp["name"]
-            if not nm:
-                continue
-            tp = inp["type"].lower()
-            if "csrf" in nm.lower():
-                csrf_val = inp["value"]
-                payload_dict[nm] = inp["value"]
-            elif tp in ("email", "text") or "email" in nm.lower() or "user" in nm.lower():
-                payload_dict[nm] = email
-            elif tp == "password" or "pass" in nm.lower():
-                payload_dict[nm] = password
-            elif tp == "checkbox":
-                payload_dict[nm] = inp["value"] or "on"
-            elif tp != "submit":
-                payload_dict[nm] = inp["value"]
-    else:
-        payload_dict = {"email": email, "password": password}
-
-    if not csrf_val:
-        for mk, mv in parser.meta.items():
-            if "csrf" in mk.lower():
-                csrf_val = mv
-
-    post_url = urllib.parse.urljoin(f"{BASE}/login", form_action)
-    encoded = urllib.parse.urlencode(payload_dict).encode("utf-8")
-    post_headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": BASE,
-        "Referer": f"{BASE}/login",
-    }
-    if csrf_val:
-        post_headers["X-CSRFToken"] = csrf_val
-        post_headers["X-CSRF-Token"] = csrf_val
-
+    # Step 2: POST /login with X-XSRF-TOKEN + JSON body
+    login_body = json.dumps({"email": email, "password": password, "remember": True}).encode("utf-8")
     try:
-        post_resp = req(post_url, data=encoded, headers=post_headers, method="POST")
-        report_lines.append(f"POST_login_url={post_resp.geturl()} status={post_resp.status}")
-    except urllib.error.HTTPError as e:
-        report_lines.append(f"POST_login_HTTPError={e.code}")
-
-    report_lines.append(f"Cookies_after_login={[c.name for c in cj]}")
-
-    # Fetch /api/dashboard
-    dash_json_str = ""
-    try:
-        dash_resp = req(
-            f"{BASE}/api/dashboard",
-            headers={"Accept": "application/json", "Referer": f"{BASE}/app/"},
+        post_resp = req(
+            f"{BASE}/login",
+            data=login_body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+                "X-XSRF-TOKEN": xsrf,
+                "Origin": BASE,
+                "Referer": f"{BASE}/login",
+            },
+            method="POST",
         )
-        raw_bytes = dash_resp.read()
-        ct = dash_resp.headers.get("Content-Type", "")
-        report_lines.append(
-            f"GET_dashboard: status={dash_resp.status} url={dash_resp.geturl()} ct={ct} bytes={len(raw_bytes)}"
-        )
-        text = raw_bytes.decode("utf-8", errors="replace")
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                report_lines.append(f"TopKeys={list(data.keys())}")
-                for k, v in data.items():
-                    if isinstance(v, dict):
-                        report_lines.append(f"  dict[{k}] keys={list(v.keys())[:40]}")
-                    elif isinstance(v, list):
-                        first_keys = list(v[0].keys())[:35] if (v and isinstance(v[0], dict)) else type(v[0]).__name__ if v else "empty"
-                        report_lines.append(f"  list[{k}] len={len(v)} elem={first_keys}")
-                    else:
-                        report_lines.append(f"  scalar[{k}] type={type(v).__name__}")
-            scrubbed = scrub(data)
-            dash_json_str = json.dumps(scrubbed, ensure_ascii=False, indent=2)
-        except Exception as je:
-            report_lines.append(f"NotJSON={je} head={text[:220]}")
+        lines.append(f"POST_login_status={post_resp.status} final_url={post_resp.geturl()}")
     except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:220]
-        report_lines.append(f"GET_dashboard_HTTPError={e.code} body={err_body}")
+        lines.append(f"POST_login_HTTP={e.code}")
 
-    # Scan main.dart.js for /api/* routes
-    try:
-        js_resp = req(f"{BASE}/app/main.dart.js")
-        js_text = js_resp.read().decode("utf-8", errors="replace")
-        routes = sorted(set(re.findall(r"/api/[a-zA-Z0-9_/-]{2,50}", js_text)))
-        report_lines.append(f"WebClientRoutes({len(routes)})={routes[:80]}")
-    except Exception as e:
-        report_lines.append(f"JS_scan_err={e}")
+    # Step 3: GET /api/dashboard
+    xsrf2 = get_xsrf()
+    dash_resp = req(
+        f"{BASE}/api/dashboard",
+        headers={
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "X-XSRF-TOKEN": xsrf2,
+            "Referer": f"{BASE}/app/",
+        },
+    )
+    raw = dash_resp.read().decode("utf-8", errors="replace")
+    lines.append(f"GET_dashboard_status={dash_resp.status} bytes={len(raw)}")
 
-    emit_notice("Overview", "\n".join(report_lines))
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        lines.append(f"TopKeys={list(data.keys())}")
+        for k, v in data.items():
+            if isinstance(v, dict):
+                lines.append(f"  dict[{k}] ({len(v)} keys): {list(v.keys())[:50]}")
+                for sk, sv in list(v.items())[:25]:
+                    if isinstance(sv, dict):
+                        lines.append(f"    dict[{k}.{sk}] ({len(sv)} keys): {list(sv.keys())[:35]}")
+                    elif isinstance(sv, list):
+                        ek = list(sv[0].keys())[:30] if (sv and isinstance(sv[0], dict)) else (type(sv[0]).__name__ if sv else "empty")
+                        lines.append(f"    list[{k}.{sk}] (len={len(sv)}): elem={ek}")
+            elif isinstance(v, list):
+                ek = list(v[0].keys())[:35] if (v and isinstance(v[0], dict)) else (type(v[0]).__name__ if v else "empty")
+                lines.append(f"  list[{k}] (len={len(v)}): elem={ek}")
+            else:
+                lines.append(f"  scalar[{k}]: {type(v).__name__}")
 
-    if dash_json_str:
-        chunk_sz = 3200
-        for idx in range(0, min(len(dash_json_str), chunk_sz * 8), chunk_sz):
-            part = dash_json_str[idx : idx + chunk_sz]
-            emit_notice(f"DashboardSchema_{idx // chunk_sz + 1}", part)
+    emit_notice("Overview", "\n".join(lines)[:3800])
+
+    # Emit detailed scrubbed subsections (up to 8 notices,GitHub caps annotations per step at 10!)
+    if isinstance(data, dict):
+        idx = 1
+        for k, v in data.items():
+            if idx > 8:
+                break
+            sub_str = json.dumps({k: scrub(v, k, 1)}, ensure_ascii=False, indent=2)
+            emit_notice(f"Key_{idx}_{k}", sub_str[:3500])
+            idx += 1
 
     return 0
 
