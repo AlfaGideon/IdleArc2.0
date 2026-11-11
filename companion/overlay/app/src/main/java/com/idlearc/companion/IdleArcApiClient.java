@@ -29,8 +29,11 @@ public class IdleArcApiClient {
 
     public static final String API_BASE = "https://idlearc.com";
     private static final String AUTH_PREFS = "druid_helper_api_auth_v1";
+    private static final String CACHE_PREFS = "druid_helper_api_cache_v3";
 
     private static volatile Map<String, Object> cachedDashboard = null;
+    private static volatile Map<String, Object> cachedGameConfig = null;
+    private static volatile long lastSyncTimeMs = 0L;
 
     public interface ApiCallback {
         void onSuccess(ScreenAnalyzer.ScanResult scanResult);
@@ -67,18 +70,54 @@ public class IdleArcApiClient {
 
     public static void clearCredentials(Context ctx) {
         cachedDashboard = null;
+        lastSyncTimeMs = 0L;
         if (ctx == null) return;
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
-        if (sp == null) return;
-        sp.edit()
-          .putString("email", "")
-          .putString("password", "")
-          .putString("bearer_token", "")
-          .apply();
+        if (sp != null) {
+            sp.edit()
+              .putString("email", "")
+              .putString("password", "")
+              .putString("bearer_token", "")
+              .apply();
+        }
+        SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+        if (cp != null) {
+            cp.edit().putString("dashboard_json", "").putLong("sync_ts", 0L).apply();
+        }
     }
 
     public static Map<String, Object> getCachedDashboard() {
         return cachedDashboard;
+    }
+
+    public static Map<String, Object> getCachedGameConfig() {
+        return cachedGameConfig;
+    }
+
+    public static long getLastSyncTimeMs() {
+        return lastSyncTimeMs;
+    }
+
+    /** Мгновенно подгружает последний сохранённый слепок /api/dashboard из локального кэша устройства */
+    public static boolean ensureCacheLoaded(Context ctx, DruidProfile profile) {
+        if (cachedDashboard != null) return true;
+        if (ctx == null) return false;
+        SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+        if (cp == null) return false;
+        String raw = cp.getString("dashboard_json", "");
+        if (raw == null || raw.isEmpty()) return false;
+        Map<String, Object> parsed = SimpleJson.parseObject(raw);
+        if (parsed == null || parsed.isEmpty()) return false;
+        cachedDashboard = parsed;
+        lastSyncTimeMs = cp.getLong("sync_ts", 0L);
+        String rawCfg = cp.getString("game_config_json", "");
+        if (rawCfg != null && !rawCfg.isEmpty()) {
+            cachedGameConfig = SimpleJson.parseObject(rawCfg);
+        }
+        if (profile != null) {
+            applyDashboardToProfile(parsed, profile);
+        }
+        return true;
     }
 
     /** Асинхронная синхронизация с https://idlearc.com/api/dashboard в фоновом потоке */
@@ -125,9 +164,28 @@ public class IdleArcApiClient {
                         return;
                     }
                     cachedDashboard = dash;
+                    lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
                     if (ctx != null) {
                         profile.save(ctx);
+                        SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+                        if (cp != null) {
+                            SharedPreferences.Editor ed = cp.edit()
+                                    .putString("dashboard_json", dashJson)
+                                    .putLong("sync_ts", lastSyncTimeMs);
+                            if (cachedGameConfig == null) {
+                                try {
+                                    String cfgJson = fetchPublicGameConfigJson();
+                                    Map<String, Object> cfgMap = SimpleJson.parseObject(cfgJson);
+                                    if (cfgMap != null && !cfgMap.isEmpty()) {
+                                        cachedGameConfig = cfgMap;
+                                        ed.putString("game_config_json", cfgJson);
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            }
+                            ed.apply();
+                        }
                     }
                     ScreenAnalyzer.ScanResult sr = buildFullDashboardScanResult(dash, profile);
                     if (cb != null) cb.onSuccess(sr);
@@ -200,6 +258,21 @@ public class IdleArcApiClient {
         if (code != 200) {
             throw new Exception("Ошибка загрузки /api/dashboard: HTTP " + code);
         }
+        return respText;
+    }
+
+    public static String fetchPublicGameConfigJson() throws Exception {
+        URL url = new URL(API_BASE + "/api/config/game");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(15000);
+        conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("User-Agent", "IdleArc-DruidHelper/3.0");
+        int code = conn.getResponseCode();
+        String respText = readAll(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream());
+        conn.disconnect();
+        if (code != 200) throw new Exception("HTTP " + code);
         return respText;
     }
 

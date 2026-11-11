@@ -132,10 +132,12 @@ public class ApiClientSuite {
                     + "]"
                 + "}"
             + "},"
-            + "\\"characterPets\\":[{\\"is_equipped\\":true,\\"compound_min_equipped\\":120,\\"compound_effective_cap\\":135}],"
-            + "\\"equippedTalismans\\":[{\\"inscription_totals\\":{\\"double_hit_chance\\":{\\"total\\":36},\\"double_damage_chance\\":{\\"total\\":30},\\"pet_damage_bonus\\":{\\"total\\":120}}}],"
+            + "\\"newLoot\\":[{\\"name\\":\\"Ancient Gauntlets\\",\\"slot\\":\\"hands\\",\\"type\\":\\"gloves\\",\\"tier\\":6,\\"level\\":420,\\"drop_bonus_type\\":\\"rune_drops\\",\\"drop_bonus_value\\":22}],"
+            + "\\"newGems\\":[{\\"family\\":\\"jade\\",\\"rarity_slug\\":\\"perfect\\",\\"quality\\":97,\\"pristine\\":true,\\"secondaries\\":[{\\"stat\\":\\"pet_damage\\",\\"value\\":8}]}],"
+            + "\\"characterPets\\":[{\\"name\\":\\"Beaver\\",\\"is_equipped\\":true,\\"compound_level\\":120,\\"compound_min_equipped\\":120,\\"compound_effective_cap\\":135}],"
+            + "\\"equippedTalismans\\":[{\\"name\\":\\"Sun Talisman\\",\\"slot\\":1,\\"level\\":50,\\"inscription_totals\\":{\\"double_hit_chance\\":{\\"total\\":36},\\"double_damage_chance\\":{\\"total\\":30},\\"pet_damage_bonus\\":{\\"total\\":120}}}],"
             + "\\"activeClassSkillPresetSlot\\":1,"
-            + "\\"classSkillPresetSlots\\":[{\\"slot\\":1,\\"point_count\\":145}]"
+            + "\\"classSkillPresetSlots\\":[{\\"slot\\":1,\\"point_count\\":145,\\"ranks\\":{\\"73\\":10,\\"88\\":5}}]"
         + "}";
 
         Map<String, Object> dash = SimpleJson.parseObject(syntheticDashboard);
@@ -163,6 +165,27 @@ public class ApiClientSuite {
         ScreenAnalyzer.ScanResult srFarm = IdleArcApiClient.buildFullDashboardScanResult(dash, p);
         check(srFarm.details.contains("Янтарь"), "Recommends Amber in FARM_LOOT mode");
 
+        // Тестируем все 6 вкладок нового чистого API-движка v3.0 (ApiDashboardEngine)
+        p.mode = DruidProfile.BuildMode.PUSH;
+        String tab0 = ApiDashboardEngine.buildSummaryAndActionPlan(dash, p);
+        check(tab0.contains("ЖИВЫЕ ДАННЫЕ СЕРВЕРА") && tab0.contains("ПЛАН ДЕЙСТВИЙ"), "Tab 0 Summary & Action Plan");
+
+        String tab1All = ApiDashboardEngine.buildEquipmentReport(dash, p, ApiDashboardEngine.EquippedSlotKey.ALL);
+        String tab1Gloves = ApiDashboardEngine.buildEquipmentReport(dash, p, ApiDashboardEngine.EquippedSlotKey.GLOVES);
+        check(tab1All.contains("Перчатки") && tab1Gloves.contains("ЗАМЕНИТЬ НА:"), "Tab 1 Equipment audit");
+
+        String tab2Bag = ApiDashboardEngine.buildBagLootAndGemsReport(dash, p);
+        check(tab2Bag.contains("В ФАРМ-СЕТ") && tab2Bag.contains("PRISTINE"), "Tab 2 Bag sorter");
+
+        String tab3Gems = ApiDashboardEngine.buildAll20GemsReport(dash, p);
+        check(tab3Gems.contains("СЕРВЕРНЫЙ АУДИТ ГНЁЗД") && tab3Gems.contains("Шанс крита +4.2%"), "Tab 3 All 20 Gems audit");
+
+        String tab4Pets = ApiDashboardEngine.buildPetsAndTalismansReport(dash, p);
+        check(tab4Pets.contains("Beaver") && tab4Pets.contains("Sun Talisman"), "Tab 4 Pets & Talismans");
+
+        String tab5Skills = ApiDashboardEngine.buildSkillsAuditReport(dash, p, null);
+        check(tab5Skills.contains("НАЙДЕНЫ СВОБОДНЫЕ ОЧКИ НАВЫКОВ") && tab5Skills.contains("Сердце-близнец"), "Tab 5 Skills overcap reclaim");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -183,6 +206,7 @@ public class ApiClientSuite {
                 str(SRC_DIR / "AffixPositionOptimizer.java"),
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(SRC_DIR / "IdleArcApiClient.java"),
+                str(SRC_DIR / "ApiDashboardEngine.java"),
                 str(tmp / "ApiClientSuite.java"),
             ]
 

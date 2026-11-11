@@ -2,12 +2,10 @@ package com.idlearc.companion;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -24,40 +22,48 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.Map;
 
 /**
- * Главный экран приложения IdleArc Druid Helper v2.2.0.
- * Прямая синхронизация с официальным API (idlearc.com/api/dashboard), визуальный OCR-сканер,
- * анализатор Гнёзд/Самоцветов, реляционный симулятор снаряжения и обновление по воздуху (OTA).
+ * Главный экран Druid Helper v3.0.0 (Pure API Edition).
+ * Новый помощник, построенный на 100% вокруг официального API игры (https://idlearc.com/api/dashboard)
+ * без захвата экрана, без OCR-погрешностей и со встроенным обновлением по воздуху (OTA).
  */
 public class MainActivity extends Activity {
 
     private static final int REQ_OVERLAY = 5001;
-    private static final int REQ_PROJECTION = 5002;
     private static final int REQ_NOTIF = 5003;
 
-    private TextView permStatusTv;
+    private TextView apiStatusTv;
+    private LinearLayout authFieldsBox;
+    private TextView toggleAuthFormBtn;
+    private boolean apiBusy = false;
+
     private TextView otaStatusTv;
     private TextView otaActionBtn;
     private OtaUpdater.ReleaseInfo availableRelease = null;
     private boolean otaBusy = false;
 
-    private TextView apiStatusTv;
-    private TextView apiReportTv;
-    private boolean apiBusy = false;
+    private TextView dashHeaderTv;
+    private TextView dashBodyTv;
+    private HorizontalScrollView mainSlotBarScroll;
 
-    private TextView gemBodyTv;
-    private TextView auditBodyTv;
-    private TextView inscBodyTv;
-    private TextView slotDetailBodyTv;
-    private final TextView[] mainModeButtons = new TextView[DruidProfile.BuildMode.values().length];
-    private SlotAffixAdvisor.GearSlot activeMainSlot = SlotAffixAdvisor.GearSlot.WEAPON;
+    private final TextView[] modeButtons = new TextView[DruidProfile.BuildMode.values().length];
+    private final TextView[] tabButtons = new TextView[6];
+    private final TextView[] slotButtons = new TextView[ApiDashboardEngine.EquippedSlotKey.values().length];
+
+    private int activeTab = 0;
+    private ApiDashboardEngine.EquippedSlotKey selectedSlotKey = ApiDashboardEngine.EquippedSlotKey.ALL;
     private DruidProfile profile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         profile = DruidProfile.load(this);
+        IdleArcApiClient.ensureCacheLoaded(this, profile);
 
         if (Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -68,7 +74,7 @@ public class MainActivity extends Activity {
         buildMainScreen();
         runOtaCheck(true);
         if (IdleArcApiClient.hasSavedCredentials(this)) {
-            triggerMainApiSync();
+            triggerMainApiSync(true);
         }
     }
 
@@ -76,141 +82,193 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         profile = DruidProfile.load(this);
-        updatePermissionBanner();
-        refreshDynamicCards();
+        IdleArcApiClient.ensureCacheLoaded(this, profile);
+        refreshDashboardUi();
         OtaUpdater.resumePendingInstallIfPermitted(this);
-    }
-
-    private void refreshDynamicCards() {
-        DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
-        for (int i = 0; i < modes.length; i++) {
-            if (mainModeButtons[i] != null) {
-                boolean sel = (profile.mode == modes[i]);
-                GradientDrawable gd = new GradientDrawable();
-                gd.setColor(sel ? 0xFF065F46 : 0xFF252236);
-                gd.setCornerRadius(dp(10));
-                gd.setStroke(dp(1), sel ? 0xFF34D399 : 0xFF3F3B54);
-                mainModeButtons[i].setBackground(gd);
-                mainModeButtons[i].setTextColor(sel ? 0xFFECFDF5 : 0xFFD1D5DB);
-            }
-        }
-        if (gemBodyTv != null) {
-            gemBodyTv.setText(GemSocketOptimizer.buildOptimalGemBlueprint(profile, 46));
-        }
-        if (auditBodyTv != null) {
-            auditBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
-        }
-        if (inscBodyTv != null) {
-            inscBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
-        }
-        if (slotDetailBodyTv != null && activeMainSlot != null) {
-            String apiSlot = IdleArcApiClient.buildEquippedSlotDetailFromCache(activeMainSlot, profile);
-            String baseGuide = SlotAffixAdvisor.formatSlotGuide(activeMainSlot, profile);
-            slotDetailBodyTv.setText(apiSlot != null ? (apiSlot + "\n\n" + baseGuide) : baseGuide);
-        }
-        if (apiReportTv != null && IdleArcApiClient.getCachedDashboard() != null) {
-            ScreenAnalyzer.ScanResult sr = IdleArcApiClient.buildFullDashboardScanResult(
-                    IdleArcApiClient.getCachedDashboard(), profile);
-            apiReportTv.setText(sr.details);
-            apiReportTv.setVisibility(View.VISIBLE);
-        }
     }
 
     private void buildMainScreen() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(0xFF12101B);
+        scroll.setBackgroundColor(0xFF0B111B);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(20), dp(16), dp(28));
+        root.setPadding(dp(15), dp(18), dp(15), dp(28));
 
-        // Заголовок
+        // Заголовок v3.0 Pure API
         TextView headerTitle = new TextView(this);
-        headerTitle.setText("🌿 IdleArc Druid Helper v" + OtaUpdater.getCurrentVersionName(this));
+        headerTitle.setText("🌿 Druid Helper v" + OtaUpdater.getCurrentVersionName(this) + " · API");
         headerTitle.setTextColor(0xFF34D399);
         headerTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        headerTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22.5f);
         root.addView(headerTitle);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Прямая синхронизация с сервером /api/dashboard + Live OCR + Гнёзда/Самоцветы + OTA");
-        subtitle.setTextColor(0xFF9CA3AF);
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        subtitle.setPadding(0, dp(4), 0, dp(14));
+        subtitle.setText("100% серверная аналитика из idlearc.com/api/dashboard · Без захвата экрана и без погрешностей OCR");
+        subtitle.setTextColor(0xFF94A3B8);
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.3f);
+        subtitle.setPadding(0, dp(3), 0, dp(14));
         root.addView(subtitle);
 
-        // Карточка запуска виджета
-        LinearLayout launchCard = makeCard(0xFF1B1829, 0xFF34D399);
+        // =========================================================================
+        // КАРТОЧКА 1: ПОДКЛЮЧЕНИЕ К IDLEARC API + ЗАПУСК ПЛАВАЮЩЕГО ВИДЖЕТА
+        // =========================================================================
+        LinearLayout apiCard = makeCard(0xFF111C2D, 0xFF38BDF8);
+        root.addView(apiCard);
 
-        permStatusTv = new TextView(this);
-        permStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        permStatusTv.setPadding(0, 0, 0, dp(10));
-        launchCard.addView(permStatusTv);
+        TextView apiTitle = new TextView(this);
+        apiTitle.setText("🌐 Серверная синхронизация и плавающий виджет");
+        apiTitle.setTextColor(0xFF7DD3FC);
+        apiTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        apiTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
+        apiCard.addView(apiTitle);
 
-        TextView mainLaunchBtn = makeBigButton(
-                "🚀 ЗАПУСТИТЬ ПЛАВАЮЩИЙ СКАНЕР ПОВЕРХ ИГРЫ",
-                0xFF059669, 0xFFFFFFFF);
-        mainLaunchBtn.setOnClickListener(v -> startFullScannerFlow());
-        launchCard.addView(mainLaunchBtn);
+        apiStatusTv = new TextView(this);
+        apiStatusTv.setTextColor(0xFFE2E8F0);
+        apiStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
+        apiStatusTv.setPadding(0, dp(5), 0, dp(8));
+        apiCard.addView(apiStatusTv);
 
-        TextView guideOnlyBtn = makeBigButton(
-                "📖 Запустить виджет-шпаргалку (без захвата экрана)",
-                0xFF2D2844, 0xFFE5E7EB);
-        LinearLayout.LayoutParams gpLp = new LinearLayout.LayoutParams(
+        boolean hasCreds = IdleArcApiClient.hasSavedCredentials(this);
+
+        authFieldsBox = new LinearLayout(this);
+        authFieldsBox.setOrientation(LinearLayout.VERTICAL);
+        authFieldsBox.setVisibility(hasCreds ? View.GONE : View.VISIBLE);
+
+        final EditText emailInput = new EditText(this);
+        emailInput.setHint("Email от аккаунта IdleArc");
+        emailInput.setHintTextColor(0xFF64748B);
+        emailInput.setTextColor(0xFFF8FAFC);
+        emailInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.2f);
+        emailInput.setSingleLine(true);
+        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        emailInput.setText(IdleArcApiClient.getSavedEmail(this));
+        emailInput.setPadding(dp(11), dp(9), dp(11), dp(9));
+        emailInput.setBackground(roundRect(0xFF0B1320, 0xFF334155, dp(1), dp(10)));
+        authFieldsBox.addView(emailInput);
+
+        final EditText passInput = new EditText(this);
+        passInput.setHint(hasCreds ? "Новый пароль (если менялся)" : "Пароль от аккаунта IdleArc");
+        passInput.setHintTextColor(0xFF64748B);
+        passInput.setTextColor(0xFFF8FAFC);
+        passInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.2f);
+        passInput.setSingleLine(true);
+        passInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passInput.setPadding(dp(11), dp(9), dp(11), dp(9));
+        LinearLayout.LayoutParams pwLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        gpLp.topMargin = dp(8);
-        guideOnlyBtn.setLayoutParams(gpLp);
-        guideOnlyBtn.setOnClickListener(v -> startGuideOnlyOverlay());
-        launchCard.addView(guideOnlyBtn);
+        pwLp.topMargin = dp(6);
+        pwLp.bottomMargin = dp(8);
+        passInput.setLayoutParams(pwLp);
+        passInput.setBackground(roundRect(0xFF0B1320, 0xFF334155, dp(1), dp(10)));
+        authFieldsBox.addView(passInput);
 
-        TextView stopBtn = makeBigButton(
-                "✖ Остановить плавающий виджет",
-                0xFF3B1C26, 0xFFFCA5A5);
-        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(
+        TextView clearCredsBtn = makeBigButton("🗑️ Удалить сохранённый логин с устройства", 0xFF1E293B, 0xFF94A3B8);
+        LinearLayout.LayoutParams clrLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        stLp.topMargin = dp(8);
-        stopBtn.setLayoutParams(stLp);
-        stopBtn.setOnClickListener(v -> {
-            stopService(new Intent(MainActivity.this, OverlayService.class));
-            Toast.makeText(MainActivity.this, "Виджет остановлен", Toast.LENGTH_SHORT).show();
+        clrLp.bottomMargin = dp(8);
+        clearCredsBtn.setLayoutParams(clrLp);
+        clearCredsBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                IdleArcApiClient.clearCredentials(MainActivity.this);
+                emailInput.setText("");
+                passInput.setText("");
+                authFieldsBox.setVisibility(View.VISIBLE);
+                toggleAuthFormBtn.setVisibility(View.GONE);
+                refreshDashboardUi();
+                Toast.makeText(MainActivity.this, "Локальные данные входа удалены", Toast.LENGTH_SHORT).show();
+            }
         });
-        launchCard.addView(stopBtn);
+        authFieldsBox.addView(clearCredsBtn);
+        apiCard.addView(authFieldsBox);
 
-        TextView howToTv = new TextView(this);
-        howToTv.setText("\nКак пользоваться в IdleArc:\n"
-                + "1. Нажми зелёную кнопку выше -> разреши «Поверх других окон» и «Запись/трансляцию экрана».\n"
-                + "2. Открой IdleArc — сбоку появится плавающая таблетка «🌿 ДРУИД | 🔍 СКАН | ⚡».\n"
-                + "3. Открой любой выпавший предмет, сравнение шмота, 3 надписи талисмана, навык или «Характеристики персонажа» и нажми «🔍 СКАН» (или включи «⚡» для авто-отслеживания!).");
-        howToTv.setTextColor(0xFFD1D5DB);
-        howToTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
-        howToTv.setLineSpacing(dp(2), 1.05f);
-        launchCard.addView(howToTv);
+        toggleAuthFormBtn = makeBigButton("🔑 Сменить аккаунт / настройки входа", 0xFF1E293B, 0xFFCBD5E1);
+        LinearLayout.LayoutParams tglLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        tglLp.bottomMargin = dp(8);
+        toggleAuthFormBtn.setLayoutParams(tglLp);
+        toggleAuthFormBtn.setVisibility(hasCreds ? View.VISIBLE : View.GONE);
+        toggleAuthFormBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                boolean show = authFieldsBox.getVisibility() != View.VISIBLE;
+                authFieldsBox.setVisibility(show ? View.VISIBLE : View.GONE);
+            }
+        });
+        apiCard.addView(toggleAuthFormBtn);
 
-        root.addView(launchCard);
+        TextView syncBtn = makeBigButton("🔄 СИНХРОНИЗИРОВАТЬ С СЕРВЕРОМ IDLEARC", 0xFF0284C7, 0xFFFFFFFF);
+        syncBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String em = emailInput.getText() != null ? emailInput.getText().toString().trim() : "";
+                String pw = passInput.getText() != null ? passInput.getText().toString() : "";
+                if (!em.isEmpty() && !pw.isEmpty()) {
+                    IdleArcApiClient.saveCredentials(MainActivity.this, em, pw, "");
+                    passInput.setText("");
+                    authFieldsBox.setVisibility(View.GONE);
+                    toggleAuthFormBtn.setVisibility(View.VISIBLE);
+                }
+                triggerMainApiSync(false);
+            }
+        });
+        apiCard.addView(syncBtn);
 
-        // Карточка обновления по воздуху (OTA)
-        LinearLayout otaCard = makeCard(0xFF16202B, 0xFF38BDF8);
+        TextView launchOverlayBtn = makeBigButton("🚀 ЗАПУСТИТЬ ПЛАВАЮЩИЙ API-ВИДЖЕТ ПОВЕРХ ИГРЫ", 0xFF059669, 0xFFFFFFFF);
+        LinearLayout.LayoutParams loLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        loLp.topMargin = dp(8);
+        launchOverlayBtn.setLayoutParams(loLp);
+        launchOverlayBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startApiOverlay();
+            }
+        });
+        apiCard.addView(launchOverlayBtn);
+
+        TextView stopOverlayBtn = makeBigButton("✖ Выключить плавающий виджет", 0xFF3F1D28, 0xFFFCA5A5);
+        LinearLayout.LayoutParams soLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        soLp.topMargin = dp(6);
+        stopOverlayBtn.setLayoutParams(soLp);
+        stopOverlayBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent stop = new Intent(MainActivity.this, OverlayService.class)
+                        .setAction(OverlayService.ACTION_STOP);
+                startService(stop);
+                Toast.makeText(MainActivity.this, "Плавающий виджет остановлен", Toast.LENGTH_SHORT).show();
+            }
+        });
+        apiCard.addView(stopOverlayBtn);
+
+        // =========================================================================
+        // КАРТОЧКА 2: ОБНОВЛЕНИЕ ПО ВОЗДУХУ (OTA)
+        // =========================================================================
+        LinearLayout otaCard = makeCard(0xFF131D2B, 0xFF60A5FA);
         LinearLayout.LayoutParams otaLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        otaLp.topMargin = dp(12);
+        otaLp.topMargin = dp(13);
         otaCard.setLayoutParams(otaLp);
 
         TextView otaTitle = new TextView(this);
         otaTitle.setText("☁️ Обновление по воздуху (OTA)");
-        otaTitle.setTextColor(0xFF7DD3FC);
+        otaTitle.setTextColor(0xFF93C5FD);
         otaTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        otaTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        otaTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.8f);
         otaCard.addView(otaTitle);
 
         otaStatusTv = new TextView(this);
-        otaStatusTv.setText("Текущая версия: v" + OtaUpdater.getCurrentVersionName(this)
+        otaStatusTv.setText("Версия v" + OtaUpdater.getCurrentVersionName(this)
                 + " (сборка " + OtaUpdater.getCurrentVersionCode(this) + ") · проверка обновлений...");
-        otaStatusTv.setTextColor(0xFFD1D5DB);
-        otaStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
+        otaStatusTv.setTextColor(0xFFCBD5E1);
+        otaStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         otaStatusTv.setPadding(0, dp(4), 0, dp(8));
         otaCard.addView(otaStatusTv);
 
-        otaActionBtn = makeBigButton("🔄 Проверить обновление на GitHub", 0xFF0369A1, 0xFFFFFFFF);
+        otaActionBtn = makeBigButton("🔄 Проверить обновление", 0xFF1D4ED8, 0xFFFFFFFF);
         otaActionBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -225,328 +283,199 @@ public class MainActivity extends Activity {
         otaCard.addView(otaActionBtn);
         root.addView(otaCard);
 
-        // Карточка прямой синхронизации с официальным API игры (https://idlearc.com/api/dashboard)
-        LinearLayout apiCard = makeCard(0xFF132030, 0xFF38BDF8);
-        LinearLayout.LayoutParams apiCardLp = new LinearLayout.LayoutParams(
+        // =========================================================================
+        // КАРТОЧКА 3: ПОЛНЫЙ 6-ВКЛАДОЧНЫЙ ЦЕНТР ПЕРСОНАЖА ИЗ /api/dashboard
+        // =========================================================================
+        LinearLayout dashCard = makeCard(0xFF111827, 0xFF34D399);
+        LinearLayout.LayoutParams dcLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        apiCardLp.topMargin = dp(14);
-        apiCard.setLayoutParams(apiCardLp);
+        dcLp.topMargin = dp(14);
+        dashCard.setLayoutParams(dcLp);
 
-        TextView apiTitle = new TextView(this);
-        apiTitle.setText("🌐 Прямая синхронизация с сервером (idlearc.com/api/dashboard)");
-        apiTitle.setTextColor(0xFF7DD3FC);
-        apiTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        apiTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.2f);
-        apiCard.addView(apiTitle);
+        dashHeaderTv = new TextView(this);
+        dashHeaderTv.setText("📊 Аналитический центр Друида (API)");
+        dashHeaderTv.setTextColor(0xFF6EE7B7);
+        dashHeaderTv.setTypeface(Typeface.DEFAULT_BOLD);
+        dashHeaderTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.8f);
+        dashCard.addView(dashHeaderTv);
 
-        apiStatusTv = new TextView(this);
-        apiStatusTv.setText(IdleArcApiClient.hasSavedCredentials(this)
-                ? ("✅ Аккаунт подключён (" + IdleArcApiClient.getSavedEmail(this) + ") · можно обновлять в 1 клик кнопкой «🌐 API» прямо в виджете!")
-                : "Введи Email и пароль от IdleArc один раз (хранятся только локально на твоём телефоне). За 0.4 сек загружает все 31 стат, все 10 надетых вещей и все 20 камней с 0% погрешности OCR!");
-        apiStatusTv.setTextColor(0xFFD1D5DB);
-        apiStatusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.1f);
-        apiStatusTv.setPadding(0, dp(4), 0, dp(8));
-        apiCard.addView(apiStatusTv);
-
-        final EditText emailInput = new EditText(this);
-        emailInput.setHint("Email от аккаунта IdleArc");
-        emailInput.setHintTextColor(0xFF6B7280);
-        emailInput.setTextColor(0xFFF9FAFB);
-        emailInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        emailInput.setSingleLine(true);
-        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        emailInput.setText(IdleArcApiClient.getSavedEmail(this));
-        emailInput.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable emBg = new GradientDrawable();
-        emBg.setColor(0xFF0F172A);
-        emBg.setCornerRadius(dp(10));
-        emBg.setStroke(dp(1), 0xFF334155);
-        emailInput.setBackground(emBg);
-        apiCard.addView(emailInput);
-
-        final EditText passInput = new EditText(this);
-        passInput.setHint(IdleArcApiClient.hasSavedCredentials(this)
-                ? "Пароль сохранён локально (оставь пустым или введи заново)"
-                : "Пароль от аккаунта IdleArc");
-        passInput.setHintTextColor(0xFF6B7280);
-        passInput.setTextColor(0xFFF9FAFB);
-        passInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
-        passInput.setSingleLine(true);
-        passInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        passInput.setPadding(dp(10), dp(8), dp(10), dp(8));
-        LinearLayout.LayoutParams pwLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pwLp.topMargin = dp(6);
-        passInput.setLayoutParams(pwLp);
-        GradientDrawable pwBg = new GradientDrawable();
-        pwBg.setColor(0xFF0F172A);
-        pwBg.setCornerRadius(dp(10));
-        pwBg.setStroke(dp(1), 0xFF334155);
-        passInput.setBackground(pwBg);
-        apiCard.addView(passInput);
-
-        TextView syncApiBtn = makeBigButton("🌐 Синхронизировать героя (31 стат + 10 вещей + 20 камней)", 0xFF0284C7, 0xFFFFFFFF);
-        LinearLayout.LayoutParams syncLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        syncLp.topMargin = dp(8);
-        syncApiBtn.setLayoutParams(syncLp);
-        syncApiBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                String em = emailInput.getText() != null ? emailInput.getText().toString().trim() : "";
-                String pw = passInput.getText() != null ? passInput.getText().toString() : "";
-                if (!em.isEmpty() && !pw.isEmpty()) {
-                    IdleArcApiClient.saveCredentials(MainActivity.this, em, pw, "");
-                    passInput.setText("");
-                    passInput.setHint("Пароль сохранён локально");
-                }
-                triggerMainApiSync();
-            }
-        });
-        apiCard.addView(syncApiBtn);
-
-        TextView clearApiBtn = makeBigButton("🗑️ Удалить сохранённый логин API с устройства", 0xFF1E293B, 0xFF94A3B8);
-        LinearLayout.LayoutParams clrLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        clrLp.topMargin = dp(6);
-        clearApiBtn.setLayoutParams(clrLp);
-        clearApiBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                IdleArcApiClient.clearCredentials(MainActivity.this);
-                emailInput.setText("");
-                passInput.setText("");
-                passInput.setHint("Пароль от аккаунта IdleArc");
-                apiStatusTv.setText("Локальные данные API удалены.");
-                apiStatusTv.setTextColor(0xFF9CA3AF);
-                if (apiReportTv != null) apiReportTv.setVisibility(View.GONE);
-                refreshDynamicCards();
-            }
-        });
-        apiCard.addView(clearApiBtn);
-
-        apiReportTv = new TextView(this);
-        apiReportTv.setTextColor(0xFFE5E7EB);
-        apiReportTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.1f);
-        apiReportTv.setLineSpacing(dp(2), 1.08f);
-        apiReportTv.setPadding(0, dp(10), 0, 0);
-        apiReportTv.setVisibility(View.GONE);
-        apiCard.addView(apiReportTv);
-
-        root.addView(apiCard);
-
-        // Переключатель сборки + Карточка «💎 Гнёзда и Самоцветы»
-        LinearLayout gemCard = makeCard(0xFF172226, 0xFF34D399);
-        LinearLayout.LayoutParams gemLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        gemLp.topMargin = dp(14);
-        gemCard.setLayoutParams(gemLp);
-
-        TextView gemTitle = new TextView(this);
-        gemTitle.setText("💎 Гнёзда и Самоцветы под разные сборки");
-        gemTitle.setTextColor(0xFF6EE7B7);
-        gemTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        gemTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
-        gemCard.addView(gemTitle);
-
-        TextView gemSub = new TextView(this);
-        gemSub.setText("Выбери активную сборку — расчёт лучших камней и доп. статов пересчитается автоматически (а при скане предмета читает камни прямо над аффиксами!):");
-        gemSub.setTextColor(0xFF9CA3AF);
-        gemSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        gemSub.setPadding(0, dp(3), 0, dp(8));
-        gemCard.addView(gemSub);
-
+        // Ряд режимов (Пуш / Боссы / Фарм / 1->Кап)
         HorizontalScrollView modeScroll = new HorizontalScrollView(this);
         modeScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout modeRow = new LinearLayout(this);
         modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setPadding(0, 0, 0, dp(10));
-        final DruidProfile.BuildMode[] allModes = DruidProfile.BuildMode.values();
-        for (int i = 0; i < allModes.length; i++) {
-            final DruidProfile.BuildMode bm = allModes[i];
-            TextView mb = new TextView(this);
-            mb.setText(bm.title);
-            mb.setTypeface(Typeface.DEFAULT_BOLD);
-            mb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-            mb.setPadding(dp(10), dp(7), dp(10), dp(7));
-            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            if (i > 0) mlp.leftMargin = dp(6);
-            mb.setLayoutParams(mlp);
+        modeRow.setPadding(0, dp(8), 0, dp(6));
+        final DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
+        for (int i = 0; i < modes.length; i++) {
+            final DruidProfile.BuildMode bm = modes[i];
+            TextView mb = makeChip(bm.title);
             mb.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     profile.mode = bm;
                     profile.save(MainActivity.this);
-                    refreshDynamicCards();
+                    refreshDashboardUi();
                 }
             });
-            mainModeButtons[i] = mb;
+            modeButtons[i] = mb;
             modeRow.addView(mb);
         }
         modeScroll.addView(modeRow);
-        gemCard.addView(modeScroll);
+        dashCard.addView(modeScroll);
 
-        gemBodyTv = new TextView(this);
-        gemBodyTv.setTextColor(0xFFF3F4F6);
-        gemBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
-        gemBodyTv.setLineSpacing(dp(2), 1.08f);
-        gemCard.addView(gemBodyTv);
-        root.addView(gemCard);
-
-        // Интерактивная карточка: Подбор аффиксов и ★ Перерождения/Пробуждения под каждый вид предмета (11 слотов)
-        LinearLayout slotCard = makeCard(0xFF1A162B, 0xFFC084FC);
-        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        scLp.topMargin = dp(14);
-        slotCard.setLayoutParams(scLp);
-
-        TextView slotCardTitle = new TextView(this);
-        slotCardTitle.setText("🛠️ Аффиксы и ★ Перерождение под каждый слот");
-        slotCardTitle.setTextColor(0xFFE9D5FF);
-        slotCardTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        slotCardTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f);
-        slotCard.addView(slotCardTitle);
-
-        TextView slotCardSub = new TextView(this);
-        slotCardSub.setText("Нажми на нужный вид предмета (доступно и прямо в плавающем виджете на вкладке «Слоты & ★»):");
-        slotCardSub.setTextColor(0xFF9CA3AF);
-        slotCardSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        slotCardSub.setPadding(0, dp(3), 0, dp(8));
-        slotCard.addView(slotCardSub);
-
-        HorizontalScrollView mainSlotScroll = new HorizontalScrollView(this);
-        mainSlotScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout mainSlotRow = new LinearLayout(this);
-        mainSlotRow.setOrientation(LinearLayout.HORIZONTAL);
-        mainSlotRow.setPadding(0, 0, 0, dp(10));
-
-        final TextView slotDetailTv = new TextView(this);
-        slotDetailTv.setTextColor(0xFFF3F4F6);
-        slotDetailTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
-        slotDetailTv.setLineSpacing(dp(2), 1.08f);
-        slotDetailBodyTv = slotDetailTv;
-
-        final SlotAffixAdvisor.GearSlot[] allGearSlots = SlotAffixAdvisor.GearSlot.values();
-        final TextView[] mainSlotChips = new TextView[allGearSlots.length];
-        for (int i = 0; i < allGearSlots.length; i++) {
-            final int idx = i;
-            final SlotAffixAdvisor.GearSlot gs = allGearSlots[i];
-            TextView chip = new TextView(this);
-            chip.setText(gs.shortChip);
-            chip.setTypeface(Typeface.DEFAULT_BOLD);
-            chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-            chip.setPadding(dp(10), dp(7), dp(10), dp(7));
-            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            if (i > 0) clp.leftMargin = dp(6);
-            chip.setLayoutParams(clp);
-            chip.setOnClickListener(v -> {
-                activeMainSlot = gs;
-                for (int j = 0; j < allGearSlots.length; j++) {
-                    boolean sel = (j == idx);
-                    GradientDrawable gd = new GradientDrawable();
-                    gd.setColor(sel ? 0xFF5B21B6 : 0xFF252236);
-                    gd.setCornerRadius(dp(10));
-                    gd.setStroke(dp(1), sel ? 0xFFC4B5FD : 0xFF3F3B54);
-                    mainSlotChips[j].setBackground(gd);
-                    mainSlotChips[j].setTextColor(sel ? 0xFFFFFFFF : 0xFFD1D5DB);
+        // Ряд 6 вкладок API
+        HorizontalScrollView tabScroll = new HorizontalScrollView(this);
+        tabScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout tabRow = new LinearLayout(this);
+        tabRow.setOrientation(LinearLayout.HORIZONTAL);
+        tabRow.setPadding(0, dp(2), 0, dp(6));
+        String[] tabNames = {
+            "🎯 Сводка", "⚔️ Шмот (10)", "🎒 Сумка", "💎 Камни (20)", "🐾 Петы/Талисм.", "🌳 Навыки"
+        };
+        for (int i = 0; i < tabNames.length; i++) {
+            final int tIdx = i;
+            TextView tb = makeChip(tabNames[i]);
+            tb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    activeTab = tIdx;
+                    refreshDashboardUi();
                 }
-                String apiSlot = IdleArcApiClient.buildEquippedSlotDetailFromCache(gs, profile);
-                String baseGuide = SlotAffixAdvisor.formatSlotGuide(gs, profile);
-                slotDetailTv.setText(apiSlot != null ? (apiSlot + "\n\n" + baseGuide) : baseGuide);
             });
-            mainSlotChips[i] = chip;
-            mainSlotRow.addView(chip);
+            tabButtons[i] = tb;
+            tabRow.addView(tb);
         }
-        mainSlotScroll.addView(mainSlotRow);
-        slotCard.addView(mainSlotScroll);
-        slotCard.addView(slotDetailTv);
-        // Инициализируем первый слот (Оружие)
-        mainSlotChips[0].performClick();
-        root.addView(slotCard);
+        tabScroll.addView(tabRow);
+        dashCard.addView(tabScroll);
 
-        // Карточка живого математического аудита отсканированного героя
-        LinearLayout auditCard = makeCard(0xFF181625, 0xFFFBBF24);
-        LinearLayout.LayoutParams acLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        acLp.topMargin = dp(14);
-        auditCard.setLayoutParams(acLp);
-
-        auditBodyTv = new TextView(this);
-        auditBodyTv.setText(DruidKnowledgeBase.buildAuditReport(profile));
-        auditBodyTv.setTextColor(0xFFF3F4F6);
-        auditBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        auditBodyTv.setLineSpacing(dp(2), 1.08f);
-        auditCard.addView(auditBodyTv);
-
-        TextView resetProfileBtn = makeBigButton(
-                "🗑️ Сбросить сохранённый скан характеристик",
-                0xFF2D2844, 0xFFFCD34D);
-        LinearLayout.LayoutParams rpLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rpLp.topMargin = dp(10);
-        resetProfileBtn.setLayoutParams(rpLp);
-        resetProfileBtn.setOnClickListener(v -> {
-            profile.resetStats(MainActivity.this);
-            refreshDynamicCards();
-            Toast.makeText(MainActivity.this,
-                    "Сохранённый скан сброшен. Открой «Характеристики персонажа» в игре и нажми СКАН.",
-                    Toast.LENGTH_SHORT).show();
-        });
-        auditCard.addView(resetProfileBtn);
-        root.addView(auditCard);
-
-        // Карточка Автонадписей и Питомцев
-        LinearLayout inscCard = makeCard(0xFF181625, 0xFFA78BFA);
-        LinearLayout.LayoutParams icLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        icLp.topMargin = dp(14);
-        inscCard.setLayoutParams(icLp);
-
-        inscBodyTv = new TextView(this);
-        inscBodyTv.setText(DruidKnowledgeBase.buildInscriptionsAndPetsGuide(profile));
-        inscBodyTv.setTextColor(0xFFE5E7EB);
-        inscBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.3f);
-        inscBodyTv.setLineSpacing(dp(2), 1.08f);
-        inscCard.addView(inscBodyTv);
-        root.addView(inscCard);
-
-        // Карточка полного гайда 1 -> Кап + все 18 навыков
-        LinearLayout guideCard = makeCard(0xFF181625, 0xFF34D399);
-        LinearLayout.LayoutParams gcLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        gcLp.topMargin = dp(14);
-        guideCard.setLayoutParams(gcLp);
-
-        StringBuilder skillsSummary = new StringBuilder();
-        skillsSummary.append(DruidKnowledgeBase.buildFullLevelingGuide()).append("\n\n")
-                     .append("━━ СПРАВОЧНИК ВСЕХ 18 НАВЫКОВ ДРУИДА (1.3.15) ━━\n");
-        for (DruidKnowledgeBase.SkillInfo s : DruidKnowledgeBase.SKILLS) {
-            skillsSummary.append("\n• ").append(s.ruName)
-                         .append(" [").append(s.branch).append(" Р").append(s.tierRank).append("] — ")
-                         .append(s.formulaRu).append("\n  ").append(s.capNoteRu);
+        // Подряд 10 реальных слотов для вкладки «⚔️ Шмот (10)»
+        mainSlotBarScroll = new HorizontalScrollView(this);
+        mainSlotBarScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout slotRow = new LinearLayout(this);
+        slotRow.setOrientation(LinearLayout.HORIZONTAL);
+        slotRow.setPadding(0, dp(2), 0, dp(8));
+        final ApiDashboardEngine.EquippedSlotKey[] slotKeys = ApiDashboardEngine.EquippedSlotKey.values();
+        for (int i = 0; i < slotKeys.length; i++) {
+            final ApiDashboardEngine.EquippedSlotKey sk = slotKeys[i];
+            TextView sbBtn = makeChip(sk.chipTitle);
+            sbBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    selectedSlotKey = sk;
+                    refreshDashboardUi();
+                }
+            });
+            slotButtons[i] = sbBtn;
+            slotRow.addView(sbBtn);
         }
+        mainSlotBarScroll.addView(slotRow);
+        mainSlotBarScroll.setVisibility(View.GONE);
+        dashCard.addView(mainSlotBarScroll);
 
-        TextView guideBody = new TextView(this);
-        guideBody.setText(skillsSummary.toString());
-        guideBody.setTextColor(0xFFE5E7EB);
-        guideBody.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.2f);
-        guideBody.setLineSpacing(dp(2), 1.06f);
-        guideCard.addView(guideBody);
-        root.addView(guideCard);
+        dashBodyTv = new TextView(this);
+        dashBodyTv.setTextColor(0xFFF1F5F9);
+        dashBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.4f);
+        dashBodyTv.setLineSpacing(dp(2), 1.08f);
+        dashBodyTv.setPadding(0, dp(4), 0, dp(4));
+        dashCard.addView(dashBodyTv);
+
+        root.addView(dashCard);
 
         scroll.addView(root);
         setContentView(scroll);
-        updatePermissionBanner();
-        refreshDynamicCards();
+        refreshDashboardUi();
     }
 
-    private void triggerMainApiSync() {
+    private void refreshDashboardUi() {
+        Map<String, Object> dash = IdleArcApiClient.getCachedDashboard();
+        boolean hasCreds = IdleArcApiClient.hasSavedCredentials(this);
+
+        if (apiStatusTv != null && !apiBusy) {
+            if (dash != null) {
+                long ts = IdleArcApiClient.getLastSyncTimeMs();
+                String timeStr = ts > 0 ? new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(ts)) : "локальный кэш";
+                apiStatusTv.setText("✅ Подключён (" + IdleArcApiClient.getSavedEmail(this)
+                        + ") · Обновлено: " + timeStr + " · Ур. " + profile.charLevel + " · GS " + profile.gearScore);
+                apiStatusTv.setTextColor(0xFF6EE7B7);
+            } else if (hasCreds) {
+                apiStatusTv.setText("Аккаунт сохранён (" + IdleArcApiClient.getSavedEmail(this) + ") — нажми кнопку синхронизации.");
+                apiStatusTv.setTextColor(0xFF93C5FD);
+            } else {
+                apiStatusTv.setText("Введи Email и пароль от IdleArc ниже (хранятся только локально на твоём телефоне). За 0.4 сек загружает все твои статы, все 10 надетых вещей, сумку, 20 камней, петов и навыки!");
+                apiStatusTv.setTextColor(0xFFCBD5E1);
+            }
+        }
+
+        DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
+        for (int i = 0; i < modes.length; i++) {
+            if (modeButtons[i] != null) {
+                boolean sel = (profile.mode == modes[i]);
+                modeButtons[i].setBackground(roundRect(sel ? 0xFF065F46 : 0xFF1E293B,
+                        sel ? 0xFF34D399 : 0xFF334155, dp(1), dp(10)));
+                modeButtons[i].setTextColor(sel ? 0xFFECFDF5 : 0xFFCBD5E1);
+            }
+        }
+
+        for (int i = 0; i < tabButtons.length; i++) {
+            if (tabButtons[i] != null) {
+                boolean sel = (activeTab == i);
+                tabButtons[i].setBackground(roundRect(sel ? 0xFF0284C7 : 0xFF1E293B,
+                        sel ? 0xFF7DD3FC : 0xFF334155, dp(1), dp(10)));
+                tabButtons[i].setTextColor(sel ? 0xFFFFFFFF : 0xFFCBD5E1);
+            }
+        }
+
+        if (mainSlotBarScroll != null) {
+            mainSlotBarScroll.setVisibility(activeTab == 1 ? View.VISIBLE : View.GONE);
+            if (activeTab == 1) {
+                ApiDashboardEngine.EquippedSlotKey[] keys = ApiDashboardEngine.EquippedSlotKey.values();
+                for (int i = 0; i < keys.length; i++) {
+                    if (slotButtons[i] != null) {
+                        boolean sel = (selectedSlotKey == keys[i]);
+                        slotButtons[i].setBackground(roundRect(sel ? 0xFF5B21B6 : 0xFF1E293B,
+                                sel ? 0xFFC4B5FD : 0xFF334155, dp(1), dp(10)));
+                        slotButtons[i].setTextColor(sel ? 0xFFFFFFFF : 0xFFCBD5E1);
+                    }
+                }
+            }
+        }
+
+        if (dashBodyTv != null) {
+            switch (activeTab) {
+                case 0:
+                    dashBodyTv.setText(ApiDashboardEngine.buildSummaryAndActionPlan(dash, profile));
+                    break;
+                case 1:
+                    dashBodyTv.setText(ApiDashboardEngine.buildEquipmentReport(dash, profile, selectedSlotKey));
+                    break;
+                case 2:
+                    dashBodyTv.setText(ApiDashboardEngine.buildBagLootAndGemsReport(dash, profile));
+                    break;
+                case 3:
+                    dashBodyTv.setText(ApiDashboardEngine.buildAll20GemsReport(dash, profile));
+                    break;
+                case 4:
+                    dashBodyTv.setText(ApiDashboardEngine.buildPetsAndTalismansReport(dash, profile));
+                    break;
+                case 5:
+                    dashBodyTv.setText(ApiDashboardEngine.buildSkillsAuditReport(
+                            dash, profile, IdleArcApiClient.getCachedGameConfig()));
+                    break;
+            }
+        }
+    }
+
+    private void triggerMainApiSync(final boolean silentStartup) {
         if (apiBusy) return;
+        if (!IdleArcApiClient.hasSavedCredentials(this)) {
+            if (!silentStartup) {
+                Toast.makeText(this, "Сначала введи Email и пароль от IdleArc!", Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         apiBusy = true;
         if (apiStatusTv != null) {
-            apiStatusTv.setText("⏳ Подключение к https://idlearc.com/api/dashboard...");
+            apiStatusTv.setText("⏳ Загрузка живого состояния героя с https://idlearc.com/api/dashboard...");
             apiStatusTv.setTextColor(0xFF93C5FD);
         }
         IdleArcApiClient.syncAsync(this, profile, new IdleArcApiClient.ApiCallback() {
@@ -556,15 +485,11 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         apiBusy = false;
-                        if (apiStatusTv != null) {
-                            apiStatusTv.setText("✅ " + scanResult.headline + " · Переключай режимы и слоты ниже!");
-                            apiStatusTv.setTextColor(0xFF6EE7B7);
+                        refreshDashboardUi();
+                        if (!silentStartup) {
+                            Toast.makeText(MainActivity.this,
+                                    "✅ Герой синхронизирован (GS " + profile.gearScore + ")!", Toast.LENGTH_SHORT).show();
                         }
-                        if (apiReportTv != null) {
-                            apiReportTv.setText(scanResult.details);
-                            apiReportTv.setVisibility(View.VISIBLE);
-                        }
-                        refreshDynamicCards();
                     }
                 });
             }
@@ -585,11 +510,37 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void startApiOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Разреши «Поверх других окон» для Druid Helper и нажми ещё раз", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQ_OVERLAY);
+            return;
+        }
+        Intent svc = new Intent(this, OverlayService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svc);
+        } else {
+            startService(svc);
+        }
+        Toast.makeText(this, "🌿 API-виджет запущен! Открывай IdleArc", Toast.LENGTH_SHORT).show();
+        moveTaskToBack(true);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_OVERLAY && Settings.canDrawOverlays(this)) {
+            startApiOverlay();
+        }
+    }
+
     private void runOtaCheck(final boolean silentStartup) {
         if (otaBusy) return;
         otaBusy = true;
         if (!silentStartup && otaStatusTv != null) {
-            otaStatusTv.setText("⏳ Проверка обновлений на GitHub...");
+            otaStatusTv.setText("⏳ Проверка обновлений...");
             otaStatusTv.setTextColor(0xFF93C5FD);
         }
         OtaUpdater.checkForUpdatesAsync(this, new OtaUpdater.CheckCallback() {
@@ -605,10 +556,7 @@ public class MainActivity extends Activity {
                 }
                 if (otaActionBtn != null) {
                     otaActionBtn.setText("⬇️ СКАЧАТЬ И УСТАНОВИТЬ v" + latest.versionName);
-                    GradientDrawable gd = new GradientDrawable();
-                    gd.setColor(0xFF059669);
-                    gd.setCornerRadius(dp(12));
-                    otaActionBtn.setBackground(gd);
+                    otaActionBtn.setBackground(roundRect(0xFF059669, 0, 0, dp(12)));
                 }
             }
 
@@ -629,9 +577,9 @@ public class MainActivity extends Activity {
             public void onError(String message) {
                 otaBusy = false;
                 if (otaStatusTv != null) {
-                    otaStatusTv.setText("Текущая версия: v" + OtaUpdater.getCurrentVersionName(MainActivity.this)
-                            + (silentStartup ? " · нажми кнопку для проверки сети" : (" · " + message)));
-                    otaStatusTv.setTextColor(silentStartup ? 0xFF9CA3AF : 0xFFFCA5A5);
+                    otaStatusTv.setText("Версия v" + OtaUpdater.getCurrentVersionName(MainActivity.this)
+                            + (silentStartup ? "" : (" · " + message)));
+                    otaStatusTv.setTextColor(silentStartup ? 0xFF94A3B8 : 0xFFFCA5A5);
                 }
             }
         });
@@ -648,8 +596,7 @@ public class MainActivity extends Activity {
             public void onProgress(int percent, long downloadedBytes, long totalBytes) {
                 if (otaStatusTv != null) {
                     String pStr = percent >= 0 ? (percent + "%") : ((downloadedBytes / 1024) + " КБ");
-                    otaStatusTv.setText("⬇️ Загрузка обновления v" + rel.versionName + ": " + pStr
-                            + " (проверка SHA-256...)");
+                    otaStatusTv.setText("⬇️ Загрузка обновления v" + rel.versionName + ": " + pStr);
                     otaStatusTv.setTextColor(0xFF93C5FD);
                 }
             }
@@ -658,11 +605,11 @@ public class MainActivity extends Activity {
             public void onReadyToInstall(File apkFile) {
                 otaBusy = false;
                 if (otaStatusTv != null) {
-                    otaStatusTv.setText("✅ Файл v" + rel.versionName + " проверен! Подтверди установку поверх текущей версии.");
+                    otaStatusTv.setText("✅ Файл v" + rel.versionName + " проверен! Подтверди установку.");
                     otaStatusTv.setTextColor(0xFF6EE7B7);
                 }
                 if (otaActionBtn != null) {
-                    otaActionBtn.setText("📲 Установить скачанный v" + rel.versionName);
+                    otaActionBtn.setText("📲 Установить v" + rel.versionName);
                 }
             }
 
@@ -675,85 +622,17 @@ public class MainActivity extends Activity {
                     otaStatusTv.setTextColor(0xFFFCA5A5);
                 }
                 if (otaActionBtn != null) {
-                    otaActionBtn.setText("🔄 Повторить проверку и скачивание v" + rel.versionName);
+                    otaActionBtn.setText("🔄 Повторить проверку и скачивание");
                 }
             }
         });
-    }
-
-    private void updatePermissionBanner() {
-        boolean canOverlay = Settings.canDrawOverlays(this);
-        if (canOverlay) {
-            permStatusTv.setText("✅ Разрешение «Поверх других окон» выдано — можно запускать сканер!");
-            permStatusTv.setTextColor(0xFF6EE7B7);
-        } else {
-            permStatusTv.setText("⚠️ Шаг 1: требуется разрешение «Поверх других окон» (откроется по нажатию кнопки)");
-            permStatusTv.setTextColor(0xFFFBBF24);
-        }
-    }
-
-    private void startFullScannerFlow() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Включи переключатель для Druid Helper и вернись назад", Toast.LENGTH_LONG).show();
-            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
-            startActivityForResult(intent, REQ_OVERLAY);
-            return;
-        }
-        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        if (mpm != null) {
-            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
-        }
-    }
-
-    private void startGuideOnlyOverlay() {
-        if (!Settings.canDrawOverlays(this)) {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
-            startActivityForResult(intent, REQ_OVERLAY);
-            return;
-        }
-        Intent svc = new Intent(this, OverlayService.class);
-        startService(svc);
-        Toast.makeText(this, "🌿 Плавающая шпаргалка запущена! Открой IdleArc", Toast.LENGTH_SHORT).show();
-        moveTaskToBack(true);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_OVERLAY) {
-            updatePermissionBanner();
-            if (Settings.canDrawOverlays(this)) {
-                startFullScannerFlow();
-            }
-        } else if (requestCode == REQ_PROJECTION) {
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                Intent svc = new Intent(this, OverlayService.class);
-                svc.putExtra(OverlayService.EXTRA_RESULT_CODE, resultCode);
-                svc.putExtra(OverlayService.EXTRA_RESULT_DATA, data);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(svc);
-                } else {
-                    startService(svc);
-                }
-                Toast.makeText(this, "🌿 Виджет запущен! Переключайся в IdleArc", Toast.LENGTH_SHORT).show();
-                moveTaskToBack(true);
-            } else {
-                Toast.makeText(this, "Захват экрана отменён — можно запустить шпаргалку без захвата", Toast.LENGTH_LONG).show();
-            }
-        }
     }
 
     private LinearLayout makeCard(int bg, int stroke) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(bg);
-        gd.setCornerRadius(dp(16));
-        gd.setStroke(dp(1), stroke);
-        card.setBackground(gd);
+        card.setBackground(roundRect(bg, stroke, dp(1), dp(16)));
         return card;
     }
 
@@ -762,14 +641,32 @@ public class MainActivity extends Activity {
         tv.setText(text);
         tv.setTextColor(fg);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.2f);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(dp(14), dp(12), dp(14), dp(12));
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(bg);
-        gd.setCornerRadius(dp(12));
-        tv.setBackground(gd);
+        tv.setPadding(dp(12), dp(11), dp(12), dp(11));
+        tv.setBackground(roundRect(bg, 0, 0, dp(12)));
         return tv;
+    }
+
+    private TextView makeChip(String label) {
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tv.setPadding(dp(10), dp(7), dp(10), dp(7));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(6);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    private GradientDrawable roundRect(int fill, int stroke, int strokeW, int radius) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(fill);
+        gd.setCornerRadius(radius);
+        if (strokeW > 0) gd.setStroke(strokeW, stroke);
+        return gd;
     }
 
     private int dp(int v) {
