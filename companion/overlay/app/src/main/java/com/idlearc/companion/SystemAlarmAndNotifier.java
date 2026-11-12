@@ -104,6 +104,16 @@ public final class SystemAlarmAndNotifier {
         boolean quiet = isQuietHoursEnabled(ctx);
 
         // 1. Авто-будильники по включённым тумблерам
+        if (!radar.bossFightReady && radar.bossFightReadyAtMs > now && isAutoAlarmEnabled(ctx, "boss")) {
+            RadarTimeParser.AlarmTarget t = RadarTimeParser.buildAlarmTarget(
+                    "boss", "⚔️ IdleArc: Откатился Бой с Боссом!", radar.bossFightReadyAtMs, now, quiet);
+            scheduleSystemClockAlarm(ctx, t, false);
+        }
+        if (!radar.guildBossReady && radar.guildBossReadyAtMs > now && isAutoAlarmEnabled(ctx, "guild_boss")) {
+            RadarTimeParser.AlarmTarget t = RadarTimeParser.buildAlarmTarget(
+                    "guild_boss", "👹 IdleArc: Откатился Босс гильдии!", radar.guildBossReadyAtMs, now, quiet);
+            scheduleSystemClockAlarm(ctx, t, false);
+        }
         if (!radar.dungeonReady && radar.dungeonReadyAtMs > now && isAutoAlarmEnabled(ctx, "dungeon")) {
             RadarTimeParser.AlarmTarget t = RadarTimeParser.buildAlarmTarget(
                     "dungeon", "🏰 IdleArc: Подземелье откатилось!", radar.dungeonReadyAtMs, now, quiet);

@@ -87,21 +87,62 @@ public final class DashboardCardRenderer {
         headerRow.addView(openGameBtn);
         alarmCard.addView(headerRow);
 
+        // Строка Боя с Боссом (с поддержкой системного будильника и статуса прогресса!)
+        if (radar.bossFightReadyAtMs > now) {
+            addTimerAlarmRow(ctx, alarmCard, "⚔️ Бой с Боссом",
+                    false, radar.bossFightReadyAtMs, now, quietHours,
+                    "boss", "⚔️ IdleArc: Откатился Бой с Боссом!", refreshCb);
+        } else {
+            LinearLayout bossRow = row(ctx);
+            bossRow.setPadding(0, dp(ctx, 5), 0, dp(ctx, 5));
+            LinearLayout bCol = new LinearLayout(ctx);
+            bCol.setOrientation(LinearLayout.VERTICAL);
+            bCol.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            bCol.addView(bodyText(ctx, "⚔️ Бой с Боссом", "#ECEFF1", 13f));
+            bCol.addView(bodyText(ctx, radar.bossStatusNote,
+                    radar.bossFightReady ? "#69F0AE" : "#90CAF9", 11.5f));
+            bossRow.addView(bCol);
+
+            bossRow.addView(badge(ctx, radar.bossFightReady ? "🔥 ГОТОВ" : "В процессе",
+                    radar.bossFightReady ? "#1B4332" : "#22303C",
+                    radar.bossFightReady ? "#69F0AE" : "#90CAF9"));
+            addSpace(ctx, bossRow, 5);
+            final boolean autoBoss = SystemAlarmAndNotifier.isAutoAlarmEnabled(ctx, "boss");
+            Button autoBossBtn = pillButton(ctx, autoBoss ? "Авто ✅" : "Авто ⬜",
+                    autoBoss ? "#1B4332" : "#1C2833",
+                    autoBoss ? "#69F0AE" : "#90A4AE");
+            autoBossBtn.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    SystemAlarmAndNotifier.setAutoAlarmEnabled(ctx, "boss", !autoBoss);
+                    if (refreshCb != null) refreshCb.onRequestRefresh();
+                }
+            });
+            bossRow.addView(autoBossBtn);
+            alarmCard.addView(bossRow);
+        }
+
         // Строка Подземелья
         addTimerAlarmRow(ctx, alarmCard, "🏰 Подземелье",
                 radar.dungeonReady, radar.dungeonReadyAtMs, now, quietHours,
                 "dungeon", "🏰 IdleArc: Подземелье откатилось!", refreshCb);
 
         // Строка Босса гильдии
-        LinearLayout gbRow = row(ctx);
-        gbRow.setPadding(0, dp(ctx, 5), 0, dp(ctx, 5));
-        TextView gbLbl = bodyText(ctx, "👹 Босс гильдии", "#DCE7F0", 13f);
-        gbLbl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        gbRow.addView(gbLbl);
-        gbRow.addView(badge(ctx, radar.guildBossReady ? "🔥 БОЙ ОТКРЫТ" : "Откат",
-                radar.guildBossReady ? "#1B4332" : "#22303C",
-                radar.guildBossReady ? "#69F0AE" : "#90A4AE"));
-        alarmCard.addView(gbRow);
+        if (radar.guildBossReadyAtMs > now) {
+            addTimerAlarmRow(ctx, alarmCard, "👹 Босс гильдии",
+                    false, radar.guildBossReadyAtMs, now, quietHours,
+                    "guild_boss", "👹 IdleArc: Откатился Босс гильдии!", refreshCb);
+        } else {
+            LinearLayout gbRow = row(ctx);
+            gbRow.setPadding(0, dp(ctx, 5), 0, dp(ctx, 5));
+            TextView gbLbl = bodyText(ctx, "👹 Босс гильдии", "#DCE7F0", 13f);
+            gbLbl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            gbRow.addView(gbLbl);
+            gbRow.addView(badge(ctx, radar.guildBossReady ? "🔥 БОЙ ОТКРЫТ" : "Откат",
+                    radar.guildBossReady ? "#1B4332" : "#22303C",
+                    radar.guildBossReady ? "#69F0AE" : "#90A4AE"));
+            alarmCard.addView(gbRow);
+        }
 
         // Строка Яйца питомца
         if (radar.petHatchReady || radar.petHatchAtMs > now) {
@@ -655,38 +696,45 @@ public final class DashboardCardRenderer {
         final BagAndPetAdvisor.InventoryAuditSummary invSum = BagAndPetAdvisor.evaluateInventoryItems(
                 dash, IdleArcApiClient.getCachedInventoryItems(), p);
         LinearLayout invCard = makeCard(ctx, "#101B25", "#29B6F6");
+        String countHdr = invSum.serverTotalCount > invSum.totalItems
+                ? ("показано " + invSum.totalItems + " уникальных из " + invSum.serverTotalCount + " в рюкзаке")
+                : (invSum.totalItems + " шт. в рюкзаке");
         invCard.addView(cardTitle(ctx,
-                "🎒 Сумка предметов (" + invSum.totalItems + " шт.) — фильтр под «" + invSum.heroClass.ruName + "»",
+                "🎒 Сумка предметов (" + countHdr + ") — класс «" + invSum.heroClass.ruName + "»",
                 "#81D4FA"));
         invCard.addView(bodyText(ctx,
-                "Оценка строится СТРОГО по неизменяемому Бонусу дропа и классу (обычные аффиксы всегда можно перековать!).",
+                "Оценка строится СТРОГО по неизменяемому Бонусу дропа (Неистовство, Удача, Компаньона, Свирепость, Убийцы и др.) без дублей и без браковки перекручиваемых аффиксов!",
                 "#B0BEC5", 11.5f));
+        if (!invSum.dropBonusSummaryLine.isEmpty()) {
+            invCard.addView(bodyText(ctx, "📊 Бонусы дропа в сумке: " + invSum.dropBonusSummaryLine, "#FFE082", 11.5f));
+        }
 
         LinearLayout invKpi = row(ctx);
         invKpi.setPadding(0, dp(ctx, 6), 0, dp(ctx, 6));
-        invKpi.addView(statTile(ctx, "📦 Всего вещей", String.valueOf(invSum.totalItems), "#B3E5FC"));
+        invKpi.addView(statTile(ctx, "📦 В рюкзаке", String.valueOf(invSum.serverTotalCount), "#B3E5FC"));
         addSpace(ctx, invKpi, 6);
         invKpi.addView(statTile(ctx, "🔥 Оставить", String.valueOf(invSum.keepCount), "#69F0AE"));
         addSpace(ctx, invKpi, 6);
         invKpi.addView(statTile(ctx, "🗑️ Уничтожить", String.valueOf(invSum.salvageCount), "#FF8A80"));
         invCard.addView(invKpi);
 
-        // Кнопки быстрого фильтра Сумки предметов
+        // Кнопки быстрого фильтра Сумки предметов (включая фильтр Неистовства и Удачи!)
         LinearLayout invFilterRow = row(ctx);
         invFilterRow.setPadding(0, 0, 0, dp(ctx, 6));
         String[] fTitles = {
             "Все (" + invSum.totalItems + ")",
-            "🗑️ Уничтожить (" + invSum.salvageCount + ")",
-            "🔥 Оставить (" + invSum.keepCount + ")"
+            "🍀 Неист./Удача",
+            "🔥 Оставить (" + invSum.keepCount + ")",
+            "🗑️ Сломать (" + invSum.salvageCount + ")"
         };
-        for (int fi = 0; fi < 3; fi++) {
+        for (int fi = 0; fi < 4; fi++) {
             final int fIdx = fi;
             boolean sel = (activeItemBagFilter == fi);
             Button fb = pillButton(ctx, fTitles[fi],
                     sel ? "#1E4660" : "#16222E",
                     sel ? "#FFFFFF" : "#90A4AE");
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (fi < 2) lp.rightMargin = dp(ctx, 5);
+            if (fi < 3) lp.rightMargin = dp(ctx, 4);
             fb.setLayoutParams(lp);
             fb.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -701,13 +749,15 @@ public final class DashboardCardRenderer {
 
         if (invSum.entries.isEmpty()) {
             invCard.addView(bodyText(ctx,
-                    "Нажми «🔄 Обновить API», чтобы загрузить все страницы твоего инвентаря (/api/inventory).",
+                    "Нажми «🔄 Обновить API», чтобы загрузить твой инвентарь (/api/inventory).",
                     "#FFD54F", 12f));
         } else {
             int renderedItems = 0;
             for (BagAndPetAdvisor.BagItemEntry ie : invSum.entries) {
-                if (activeItemBagFilter == 1 && ie.action != BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
+                if (activeItemBagFilter == 1 && !("frenzy".equals(ie.dropBonusSlug) || "lucky".equals(ie.dropBonusSlug)
+                        || "scavengers".equals(ie.dropBonusSlug) || ie.action == BagAndPetAdvisor.ItemBagAction.KEEP_FARM_PRESET)) continue;
                 if (activeItemBagFilter == 2 && ie.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
+                if (activeItemBagFilter == 3 && ie.action != BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
                 renderedItems++;
 
                 LinearLayout iBox = makeCard(ctx, "#0C151D", ie.action.fgHex);

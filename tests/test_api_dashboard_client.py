@@ -190,7 +190,7 @@ public class ApiClientSuite {
         check("Получение опыта".equals(RuGameDictionary.statName("exp_gain")), "exp_gain translated");
         check("Сила атаки".equals(RuGameDictionary.statName("attack_power")), "attack_power translated");
         check("Атака и урон питомцев".equals(RuGameDictionary.statName("attack_pet_damage")), "attack_pet_damage translated");
-        check("Урон питомцев".equals(RuGameDictionary.statName("companions")), "companions drop bonus translated");
+        check(RuGameDictionary.statName("companions").contains("Урон питомцев"), "companions drop bonus translated");
         check("Безупречный".equals(RuGameDictionary.gemRarityRu("flawless")), "gem rarity translated");
         check("Талисман Духа".equals(RuGameDictionary.talismanNameRu("spirit", "Talisman of Spirit")), "talisman name translated");
         check(Math.abs(RuGameDictionary.normalizeRollQualityPct(1.0, 47, 24, 47) - 100.0) < 0.01, "0..1 roll_quality normalized to 100%");
@@ -244,10 +244,30 @@ public class ApiClientSuite {
         testInv.add(SimpleJson.parseObject("{\\"id\\":102,\\"name\\":\\"Перчатки ярости\\",\\"slot\\":\\"gloves\\",\\"type\\":\\"gloves\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"fierce\\",\\"drop_bonus_value\\":25.0}"));
         // 3) Оружие только для Воина (allowed_classes=[1]) -> УНИЧТОЖИТЬ на Друиде!
         testInv.add(SimpleJson.parseObject("{\\"id\\":103,\\"name\\":\\"Двуручный меч\\",\\"slot\\":\\"main_hand\\",\\"type\\":\\"weapon\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"companions\\",\\"drop_bonus_value\\":59.0,\\"allowed_classes\\":[1]}"));
+        // 4) Неистовство (frenzy = Доп. убийство) и Удача (lucky = Шанс повышенного тира) + дубль id=104 (не должен задваиваться!)
+        testInv.add(SimpleJson.parseObject("{\\"id\\":104,\\"name\\":\\"Сапоги неистовства\\",\\"slot\\":\\"boots\\",\\"type\\":\\"boots\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"frenzy\\",\\"drop_bonus_value\\":5.8}"));
+        testInv.add(SimpleJson.parseObject("{\\"id\\":104,\\"name\\":\\"Сапоги неистовства\\",\\"slot\\":\\"boots\\",\\"type\\":\\"boots\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"frenzy\\",\\"drop_bonus_value\\":5.8}"));
+        testInv.add(SimpleJson.parseObject("{\\"id\\":105,\\"name\\":\\"Амулет удачи\\",\\"slot\\":\\"neck\\",\\"type\\":\\"amulet\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"lucky\\",\\"drop_bonus_value\\":8.7}"));
 
+        check(RuGameDictionary.statName("frenzy").contains("Неистовство") && RuGameDictionary.statName("frenzy").contains("Доп. убийство"), "frenzy = Неистовство (Доп. убийство)");
+        check(RuGameDictionary.statName("lucky").contains("Удача"), "lucky = Удача");
+
+        p.extraKillChance = 42.0; // ниже капа 100%, чтобы Неистовство сохранялось!
         p.overrideClassId = 5; // Друид
         BagAndPetAdvisor.InventoryAuditSummary druidBag = BagAndPetAdvisor.evaluateInventoryItems(dash, testInv, p);
-        check(druidBag.totalItems >= 3, "3+ items in bag (inv + newLoot)");
+        check(druidBag.totalItems == 6, "Strict ID deduplication (5 unique in testInv + 1 unique in newLoot, duplicate id=104 ignored)");
+        boolean keptFrenzy = false;
+        boolean keptLucky = false;
+        for (BagAndPetAdvisor.BagItemEntry e : druidBag.entries) {
+            if ("Сапоги неистовства".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.KEEP_FARM_PRESET) keptFrenzy = true;
+            if ("Амулет удачи".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.KEEP_FARM_PRESET) keptLucky = true;
+        }
+        check(keptFrenzy && keptLucky, "Frenzy and Lucky drop bonuses kept for preset");
+
+        // Проверка отката Боя с Боссом в RadarTimeParser
+        Map<String, Object> bossDash = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs / 1000L) + 1800L) + "}");
+        RadarTimeParser.RadarState bossRs = RadarTimeParser.parseRadar(bossDash, nowMs);
+        check(!bossRs.bossFightReady && bossRs.bossFightReadyAtMs > nowMs, "Boss fight cooldown parsed for system alarm");
         boolean keptCompanionsOnDruid = false;
         boolean destroyedFierceOnDruid = false;
         boolean destroyedWrongClass = false;

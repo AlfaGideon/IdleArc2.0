@@ -63,6 +63,17 @@ public final class ApiFeatureAnalyzers {
         int mLvl = SimpleJson.intVal(d, "monsterLevel", 1);
         int selLvl = SimpleJson.intVal(d, "selectedMonsterLevel", mLvl);
         double prog = SimpleJson.num(d, "monsterLevelProgress", 0.0);
+        Map<String, Object> mlpMap = SimpleJson.asMap(d.get("monsterLevelProgress"));
+        if (mlpMap != null) {
+            double pct = SimpleJson.num(mlpMap, "percentage", SimpleJson.num(mlpMap, "percent", SimpleJson.num(mlpMap, "progress", -1.0)));
+            if (pct >= 0.0) {
+                prog = pct;
+            } else {
+                double k = SimpleJson.num(mlpMap, "kills", SimpleJson.num(mlpMap, "current", 0.0));
+                double req = SimpleJson.num(mlpMap, "kills_required", SimpleJson.num(mlpMap, "required", 0.0));
+                if (req > 0.0) prog = (k / req) * 100.0;
+            }
+        }
         if (prog > 0.0 && prog <= 1.0) prog *= 100.0;
 
         double hpPct = SimpleJson.num(d, "currentHealthPercentage", 100.0);

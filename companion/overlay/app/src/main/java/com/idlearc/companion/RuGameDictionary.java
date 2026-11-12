@@ -21,7 +21,6 @@ public final class RuGameDictionary {
             case "pet_damage_bonus":
             case "pet_damage_percent":
             case "companion_damage":
-            case "companions":
                 return "Урон питомцев";
             case "attack_pet_damage":
                 return "Атака и урон питомцев";
@@ -134,47 +133,61 @@ public final class RuGameDictionary {
                 return "Дроп самоцветов";
             case "lucky_chance":
             case "lucky_tier":
+            case "lucky_tier_chance":
+                return "Шанс повышенного тира (Удача)";
             case "lucky":
-                return "Шанс дропа предметов";
-            case "fierce":
-                return "Урон атаки";
-            case "precise":
-                return "Шанс крита";
-            case "brutal":
-                return "Критический урон";
-            case "relentless":
+                return "Удача (Шанс повышенного тира)";
             case "frenzy":
-                return "Шанс двойного удара";
+                return "Неистовство (Доп. убийство)";
+            case "companions":
+                return "Компаньона (Урон питомцев)";
+            case "fierce":
+                return "Свирепость (Урон атаки)";
+            case "precise":
+                return "Точность (Шанс крита)";
+            case "brutal":
+                return "Жестокость (Крит. урон)";
+            case "relentless":
+                return "Неумолимость (Двойной удар)";
             case "devastating":
-                return "Шанс двойного урона";
+                return "Сокрушение (Двойной урон)";
             case "slayers":
+                return "Убийцы (Урон по боссам)";
             case "boss_damage_bonus":
                 return "Урон по боссам";
             case "fortified":
-                return "Макс. здоровье %";
+                return "Укрепление (Макс. здоровье %)";
             case "armored":
-                return "Защита %";
+                return "Броня (Защита %)";
             case "resilient":
-                return "Снижение урона";
+                return "Стойкость (Снижение урона)";
             case "evasive":
-                return "Уклонение";
+                return "Увёртливость (Уклонение)";
             case "vampiric":
-                return "Здоровье за удар";
+                return "Вампиризм (Здоровье за удар)";
             case "draining":
-                return "Здоровье за убийство";
+                return "Иссушение (Здоровье за убийство)";
             case "bloodthirsty":
+                return "Кровожадность (Отхил %)";
             case "bloodthirst_percent":
                 return "Кровожадность %";
             case "prosperous":
-                return "Бонус золота";
+                return "Процветание (Бонус золота)";
             case "scholarly":
-                return "Бонус опыта";
+                return "Мудрость (Бонус опыта)";
             case "scavengers":
-                return "Дроп материалов";
+                return "Мародёра (Шанс дропа предметов)";
+            case "item_drop_chance":
+                return "Шанс дропа предметов";
+            case "thorned":
+                return "Отражение (Урон шипов)";
+            case "elemental_surge":
+            case "elemental_amp":
+                return "Стихийный всплеск (Усиление стихий)";
             case "runic":
-                return "Дроп рун";
+                return "Рунический (Дроп рун)";
             case "jeweled":
-                return "Дроп рубинов";
+                return "Ювелирный (Дроп рубинов)";
             case "damage_conversion":
                 return "Конверсия в стихию";
             case "melee_physical_damage":

@@ -33,7 +33,7 @@ public final class BagAndPetAdvisor {
     public enum ItemBagAction {
         KEEP_UPGRADE_BASE("🔥 ОСТАВИТЬ ПОД ОСНОВУ", "#143829", "#69F0AE"),
         KEEP_BOSS_PRESET("👹 В БОСС-ПРЕСЕТ", "#311B3F", "#EA80FC"),
-        KEEP_FARM_PRESET("💎 В ФАРМ-ПРЕСЕТ", "#1A3248", "#81D4FA"),
+        KEEP_FARM_PRESET("🍀 НЕИСТОВСТВО / УДАЧА / ФАРМ", "#1A3248", "#81D4FA"),
         KEEP_LOCKED("🔒 ЗАБЛОКИРОВАН", "#2C2816", "#FFD54F"),
         SALVAGE_DESTROY("🗑️ УНИЧТОЖИТЬ (В РАЗБОР)", "#381818", "#FF8A80");
 
@@ -89,16 +89,21 @@ public final class BagAndPetAdvisor {
     public static class InventoryAuditSummary {
         public final HeroClassProfile.HeroClass heroClass;
         public final int totalItems;
+        public final int serverTotalCount;
         public final int keepCount;
         public final int salvageCount;
+        public final String dropBonusSummaryLine;
         public final List<BagItemEntry> entries;
 
         public InventoryAuditSummary(HeroClassProfile.HeroClass heroClass, int totalItems,
-                                     int keepCount, int salvageCount, List<BagItemEntry> entries) {
+                                     int serverTotalCount, int keepCount, int salvageCount,
+                                     String dropBonusSummaryLine, List<BagItemEntry> entries) {
             this.heroClass = heroClass;
             this.totalItems = totalItems;
+            this.serverTotalCount = serverTotalCount;
             this.keepCount = keepCount;
             this.salvageCount = salvageCount;
+            this.dropBonusSummaryLine = dropBonusSummaryLine;
             this.entries = entries;
         }
     }
@@ -118,16 +123,50 @@ public final class BagAndPetAdvisor {
         List<Map<String, Object>> combined = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
 
-        // Собираем все предметы из /api/inventory + свежие newLoot из /api/dashboard без дублей
+        // Исключаем ID уже надетых на героя 10 предметов, чтобы они никогда не задваивались в сумке
+        if (dash != null) {
+            List<Object> eqCheck = SimpleJson.asList(dash.get("characterEquippedItems"));
+            if (eqCheck != null) {
+                for (Object eo : eqCheck) {
+                    Map<String, Object> em = SimpleJson.asMap(eo);
+                    if (em != null) {
+                        String eid = SimpleJson.str(em, "id", "");
+                        if (!eid.isEmpty()) seenIds.add(eid);
+                    }
+                }
+            }
+        }
+
+        // Собираем все уникальные предметы из /api/inventory + gearPresetSlots + newLoot СТРОГО без дублей по id!
         if (invItems != null) {
             for (Map<String, Object> it : invItems) {
                 if (it == null) continue;
                 String id = SimpleJson.str(it, "id", "");
-                if (!id.isEmpty()) seenIds.add(id);
+                if (!id.isEmpty()) {
+                    if (seenIds.contains(id)) continue;
+                    seenIds.add(id);
+                }
                 combined.add(it);
             }
         }
         if (dash != null) {
+            List<Object> gpList = SimpleJson.asList(dash.get("gearPresetSlots"));
+            if (gpList != null) {
+                for (Object gpo : gpList) {
+                    Map<String, Object> gpm = SimpleJson.asMap(gpo);
+                    if (gpm == null) continue;
+                    List<Object> pItems = SimpleJson.asList(gpm.get("items"));
+                    if (pItems == null) continue;
+                    for (Object pio : pItems) {
+                        Map<String, Object> it = SimpleJson.asMap(pio);
+                        if (it == null || it.get("drop_bonus_type") == null) continue;
+                        String id = SimpleJson.str(it, "id", "");
+                        if (!id.isEmpty() && seenIds.contains(id)) continue;
+                        if (!id.isEmpty()) seenIds.add(id);
+                        combined.add(it);
+                    }
+                }
+            }
             List<Object> nl = SimpleJson.asList(dash.get("newLoot"));
             if (nl != null) {
                 for (Object o : nl) {
@@ -275,19 +314,27 @@ public final class BagAndPetAdvisor {
                     reason = "Слабый дубль «Урон по боссам +" + fmt1(dbv) + "%» (в сумке есть ролл сильнее) — на разбор.";
                 }
             }
-            // 6. ЦЕННЫЕ ФАРМ-БОНУСЫ ДРОПА (предметы, руны, рубины, материалы) — оставляем ровно 1 топ-экземпляр на слот!
+            // 6. НЕИСТОВСТВО (Доп. убийство), УДАЧА (Повыш. тир), МАРОДЁРА, СТИХИЙНЫЙ ВСПЛЕСК, РУНЫ, РУБИНЫ
             else if (isValuableFarmDropBonus(dbt) && gs != null) {
-                String fKey = gs.name() + "|FARM:" + dbt;
-                double score = tier * 1000.0 + dbv;
-                Double bestScore = bestSpecialInBag.get(fKey);
-                if (bestScore != null && Math.abs(score - bestScore) < 0.001 && !claimedBestBucket.contains(fKey)) {
-                    claimedBestBucket.add(fKey);
-                    action = ItemBagAction.KEEP_FARM_PRESET;
-                    reason = "Топ-1 ролл «" + dbRu + " +" + fmt1(dbv)
-                            + "%» для этого слота — пригодится только если собираешь отдельный Фарм-пресет #2.";
-                } else {
+                if ("frenzy".equals(dbt) && p != null && p.extraKillChance >= 100.0 && p.mode != DruidProfile.BuildMode.FARM) {
                     action = locked ? ItemBagAction.KEEP_LOCKED : ItemBagAction.SALVAGE_DESTROY;
-                    reason = "Лишний дубль фарм-бонуса «" + dbRu + " +" + fmt1(dbv) + "%» (уже есть экземпляр лучше) — уничтожить.";
+                    reason = "Бонус дропа «Неистовство (Доп. убийство +" + fmt1(dbv)
+                            + "%)», но у тебя в статах Доп. убийство уже >= 100% (" + fmt1(p.extraKillChance)
+                            + "%). Если не нужен сменный Фарм-слот — можно разобрать.";
+                } else {
+                    String fKey = gs.name() + "|FARM:" + dbt;
+                    double score = tier * 1000.0 + dbv;
+                    Double bestScore = bestSpecialInBag.get(fKey);
+                    if (bestScore != null && Math.abs(score - bestScore) < 0.001 && !claimedBestBucket.contains(fKey)) {
+                        claimedBestBucket.add(fKey);
+                        action = ItemBagAction.KEEP_FARM_PRESET;
+                        reason = "🔥 Лучший в сумке ролл «" + dbRu + " +" + fmt1(dbv)
+                                + "%» для слота «" + slotRu + "» — ОБЯЗАТЕЛЬНО ОСТАВЬ под пресет Фарма / Удачи / Неистовства!";
+                    } else {
+                        action = locked ? ItemBagAction.KEEP_LOCKED : ItemBagAction.SALVAGE_DESTROY;
+                        reason = "Слабый дубль «" + dbRu + " +" + fmt1(dbv)
+                                + "%» (в сумке для этого слота уже есть экземпляр с роллом выше) — этот дубль в разбор!";
+                    }
                 }
             }
             // 7. Защитные бонусы дропа (СУ / Уклонение) — нужны ТОЛЬКО если у героя не закрыт кап 95%!
@@ -339,7 +386,22 @@ public final class BagAndPetAdvisor {
             }
         });
 
-        return new InventoryAuditSummary(hc, result.size(), keepCnt, salvageCnt, result);
+        // Сводка по найденным в сумке бонусам дропа (чтобы Неистовство и Удача были видны с первой секунды!)
+        Map<String, Integer> bonusCounts = new HashMap<>();
+        for (BagItemEntry e : result) {
+            String k = e.dropBonusRu;
+            Integer prev = bonusCounts.get(k);
+            bonusCounts.put(k, prev == null ? 1 : (prev + 1));
+        }
+        List<String> sumParts = new ArrayList<>();
+        for (Map.Entry<String, Integer> be : bonusCounts.entrySet()) {
+            sumParts.add(be.getKey() + ": " + be.getValue() + " шт.");
+        }
+        Collections.sort(sumParts);
+        int srvTotal = Math.max(result.size(), IdleArcApiClient.getCachedInventoryTotalCount());
+
+        return new InventoryAuditSummary(hc, result.size(), srvTotal, keepCnt, salvageCnt,
+                sumParts.isEmpty() ? "" : join(sumParts, " · "), result);
     }
 
     private static boolean isBisCombatDropForClass(String dbt, HeroClassProfile.HeroClass hc) {
@@ -347,16 +409,12 @@ public final class BagAndPetAdvisor {
         if (hc == HeroClassProfile.HeroClass.DRUID) {
             return "companions".equals(dbt) || "pet_damage_bonus".equals(dbt) || "pet_damage".equals(dbt);
         }
-        // Воин, Лучник, Маг, Разбойник — отдельная мультипликативная корзина Урона атаки % ("fierce")
-        if (hc == HeroClassProfile.HeroClass.ARCHER) {
-            return "fierce".equals(dbt) || "attack_damage_percent".equals(dbt);
-        }
         return "fierce".equals(dbt) || "attack_damage_percent".equals(dbt);
     }
 
     private static boolean isValuableFarmDropBonus(String dbt) {
-        return "lucky".equals(dbt) || "scavengers".equals(dbt)
-                || "runic".equals(dbt) || "jeweled".equals(dbt)
+        return "frenzy".equals(dbt) || "lucky".equals(dbt) || "scavengers".equals(dbt)
+                || "elemental_surge".equals(dbt) || "runic".equals(dbt) || "jeweled".equals(dbt)
                 || "item_quantity".equals(dbt) || "rune_drops".equals(dbt)
                 || "ruby_drops".equals(dbt) || "material_quantity".equals(dbt);
     }

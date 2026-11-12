@@ -34,7 +34,10 @@ public class IdleArcApiClient {
     private static volatile Map<String, Object> cachedDashboard = null;
     private static volatile Map<String, Object> cachedGameConfig = null;
     private static volatile List<Map<String, Object>> cachedInventoryItems = new ArrayList<>();
+    private static volatile int cachedInventoryTotalCount = 0;
     private static volatile Map<String, Object> cachedGemsData = null;
+    private static volatile Map<String, Object> cachedDungeonData = null;
+    private static volatile Map<String, Object> cachedGuildData = null;
     private static volatile long lastSyncTimeMs = 0L;
 
     public interface ApiCallback {
@@ -73,7 +76,10 @@ public class IdleArcApiClient {
     public static void clearCredentials(Context ctx) {
         cachedDashboard = null;
         cachedInventoryItems = new ArrayList<>();
+        cachedInventoryTotalCount = 0;
         cachedGemsData = null;
+        cachedDungeonData = null;
+        cachedGuildData = null;
         lastSyncTimeMs = 0L;
         if (ctx == null) return;
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
@@ -107,12 +113,25 @@ public class IdleArcApiClient {
         return cachedInventoryItems;
     }
 
+    public static int getCachedInventoryTotalCount() {
+        return cachedInventoryTotalCount > 0 ? cachedInventoryTotalCount : cachedInventoryItems.size();
+    }
+
     public static Map<String, Object> getCachedGemsData() {
         return cachedGemsData;
     }
 
+    public static Map<String, Object> getCachedDungeonData() {
+        return cachedDungeonData;
+    }
+
+    public static Map<String, Object> getCachedGuildData() {
+        return cachedGuildData;
+    }
+
     public static void setCachedInventoryAndGems(List<Map<String, Object>> invItems, Map<String, Object> gemsData) {
         cachedInventoryItems = invItems != null ? invItems : new ArrayList<Map<String, Object>>();
+        cachedInventoryTotalCount = cachedInventoryItems.size();
         cachedGemsData = gemsData;
     }
 
@@ -140,12 +159,22 @@ public class IdleArcApiClient {
         if (rawGems != null && !rawGems.isEmpty()) {
             cachedGemsData = SimpleJson.parseObject(rawGems);
         }
+        String rawDung = cp.getString("dungeon_json", "");
+        if (rawDung != null && !rawDung.isEmpty()) {
+            cachedDungeonData = SimpleJson.parseObject(rawDung);
+        }
+        String rawGuild = cp.getString("guild_json", "");
+        if (rawGuild != null && !rawGuild.isEmpty()) {
+            cachedGuildData = SimpleJson.parseObject(rawGuild);
+        }
+        cachedInventoryTotalCount = cp.getInt("inv_total_cnt", 0);
         int pageCnt = cp.getInt("inv_page_cnt", 0);
         if (pageCnt > 0) {
             List<Map<String, Object>> loadedInv = new ArrayList<>();
+            java.util.Set<String> seenIds = new java.util.HashSet<>();
             for (int pIdx = 1; pIdx <= pageCnt; pIdx++) {
                 String pJson = cp.getString("inv_page_" + pIdx, "");
-                extractInventoryPageItems(SimpleJson.parseObject(pJson), loadedInv);
+                extractInventoryPageItems(SimpleJson.parseObject(pJson), loadedInv, seenIds);
             }
             cachedInventoryItems = loadedInv;
         }
@@ -203,7 +232,7 @@ public class IdleArcApiClient {
                     lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
                     SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash);
-                    // Дополнительно загружаем полный Инвентарь вещей (/api/inventory?page=1..N) и Мешок самоцветов (/api/gems)
+                    // Дополнительно загружаем Инвентарь (/api/inventory), Мешок камней (/api/gems), Данжи/Боссов (/api/dungeon) и Гильдию (/api/guild)
                     String gemsJson = "";
                     try {
                         gemsJson = fetchAuthenticatedGetJson(token, "/api/gems");
@@ -214,25 +243,52 @@ public class IdleArcApiClient {
                     } catch (Exception ignored) {
                     }
 
+                    String dungeonJson = "";
+                    try {
+                        dungeonJson = fetchAuthenticatedGetJson(token, "/api/dungeon");
+                        Map<String, Object> dngMap = SimpleJson.parseObject(dungeonJson);
+                        if (dngMap != null && !dngMap.isEmpty()) {
+                            cachedDungeonData = dngMap;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    String guildJson = "";
+                    try {
+                        guildJson = fetchAuthenticatedGetJson(token, "/api/guild");
+                        Map<String, Object> gldMap = SimpleJson.parseObject(guildJson);
+                        if (gldMap != null && !gldMap.isEmpty()) {
+                            cachedGuildData = gldMap;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
                     List<String> rawInvPages = new ArrayList<>();
                     List<Map<String, Object>> allInvItems = new ArrayList<>();
+                    java.util.Set<String> seenInvIds = new java.util.HashSet<>();
+                    int realInvTotal = 0;
                     try {
-                        String p1Json = fetchAuthenticatedGetJson(token, "/api/inventory?page=1");
+                        String p1Json = fetchAuthenticatedGetJson(token, "/api/inventory");
                         Map<String, Object> p1Map = SimpleJson.parseObject(p1Json);
                         if (p1Map != null && !p1Map.isEmpty()) {
                             rawInvPages.add(p1Json);
-                            extractInventoryPageItems(p1Map, allInvItems);
+                            int added1 = extractInventoryPageItems(p1Map, allInvItems, seenInvIds);
                             Map<String, Object> pag = SimpleJson.asMap(p1Map.get("characterItemsPaginated"));
+                            realInvTotal = pag != null ? SimpleJson.intVal(pag, "total", added1) : added1;
                             int lastPage = pag != null ? Math.min(12, SimpleJson.intVal(pag, "last_page", 1)) : 1;
                             for (int pg = 2; pg <= lastPage; pg++) {
                                 String pgJson = fetchAuthenticatedGetJson(token, "/api/inventory?page=" + pg);
                                 Map<String, Object> pgMap = SimpleJson.parseObject(pgJson);
-                                if (pgMap != null) {
-                                    rawInvPages.add(pgJson);
-                                    extractInventoryPageItems(pgMap, allInvItems);
+                                if (pgMap == null) break;
+                                int newlyAdded = extractInventoryPageItems(pgMap, allInvItems, seenInvIds);
+                                if (newlyAdded == 0) {
+                                    // Сервер вернул дубли страницы 1 — мгновенно прекращаем цикл, чтобы не задваивать вещи!
+                                    break;
                                 }
+                                rawInvPages.add(pgJson);
                             }
                             cachedInventoryItems = allInvItems;
+                            cachedInventoryTotalCount = Math.max(realInvTotal, allInvItems.size());
                         }
                     } catch (Exception ignored) {
                     }
@@ -244,10 +300,11 @@ public class IdleArcApiClient {
                             SharedPreferences.Editor ed = cp.edit()
                                     .putString("dashboard_json", dashJson)
                                     .putLong("sync_ts", lastSyncTimeMs);
-                            if (!gemsJson.isEmpty()) {
-                                ed.putString("gems_json", gemsJson);
-                            }
+                            if (!gemsJson.isEmpty()) ed.putString("gems_json", gemsJson);
+                            if (!dungeonJson.isEmpty()) ed.putString("dungeon_json", dungeonJson);
+                            if (!guildJson.isEmpty()) ed.putString("guild_json", guildJson);
                             if (!rawInvPages.isEmpty()) {
+                                ed.putInt("inv_total_cnt", cachedInventoryTotalCount);
                                 ed.putInt("inv_page_cnt", rawInvPages.size());
                                 for (int i = 0; i < rawInvPages.size(); i++) {
                                     ed.putString("inv_page_" + (i + 1), rawInvPages.get(i));
@@ -345,15 +402,26 @@ public class IdleArcApiClient {
         return respText;
     }
 
-    private static void extractInventoryPageItems(Map<String, Object> pageRoot, List<Map<String, Object>> out) {
-        if (pageRoot == null || out == null) return;
+    private static int extractInventoryPageItems(Map<String, Object> pageRoot,
+                                                 List<Map<String, Object>> out,
+                                                 java.util.Set<String> seenIds) {
+        if (pageRoot == null || out == null) return 0;
         Map<String, Object> pag = SimpleJson.asMap(pageRoot.get("characterItemsPaginated"));
         List<Object> data = pag != null ? SimpleJson.asList(pag.get("data")) : SimpleJson.asList(pageRoot.get("items"));
-        if (data == null) return;
+        if (data == null) return 0;
+        int added = 0;
         for (Object obj : data) {
             Map<String, Object> item = SimpleJson.asMap(obj);
-            if (item != null) out.add(item);
+            if (item == null) continue;
+            String id = SimpleJson.str(item, "id", "");
+            if (!id.isEmpty()) {
+                if (seenIds != null && seenIds.contains(id)) continue;
+                if (seenIds != null) seenIds.add(id);
+            }
+            out.add(item);
+            added++;
         }
+        return added;
     }
 
     public static String fetchPublicGameConfigJson() throws Exception {

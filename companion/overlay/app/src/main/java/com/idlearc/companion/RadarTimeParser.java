@@ -43,9 +43,13 @@ public final class RadarTimeParser {
     }
 
     public static class RadarState {
+        public boolean bossFightReady;
+        public long bossFightReadyAtMs;
+        public String bossStatusNote = "";
         public boolean dungeonReady;
         public long dungeonReadyAtMs;
         public boolean guildBossReady;
+        public long guildBossReadyAtMs;
         public boolean petHatchReady;
         public long petHatchAtMs;
         public long earliestBoostEndMs;
@@ -66,6 +70,66 @@ public final class RadarTimeParser {
         RadarState r = new RadarState();
         if (d == null) return r;
 
+        // 0. Бой с Боссом (босс этажа / зоны + испытания боссов из /api/dashboard и /api/dungeon)
+        boolean bossOnCd = SimpleJson.bool(d, "isBossOnCooldown", SimpleJson.bool(d, "bossOnCooldown", false));
+        long bossExpMs = parseFlexibleTimestampMs(d.get("bossCooldownExpirationTime"), nowMs);
+        if (bossExpMs <= 0) bossExpMs = parseFlexibleTimestampMs(d.get("boss_cooldown_until"), nowMs);
+        if (bossExpMs <= 0) {
+            long remMs = (long) SimpleJson.num(d, "bossCooldownRemainingMs", 0.0);
+            if (remMs > 0) bossExpMs = nowMs + remMs;
+        }
+
+        Map<String, Object> mlp = SimpleJson.asMap(d.get("monsterLevelProgress"));
+        int kills = mlp != null ? SimpleJson.intVal(mlp, "kills", SimpleJson.intVal(mlp, "current", 0)) : 0;
+        int reqKills = mlp != null ? SimpleJson.intVal(mlp, "kills_required", SimpleJson.intVal(mlp, "required", SimpleJson.intVal(mlp, "target", 0))) : 0;
+        if (mlp != null && bossExpMs <= 0) {
+            bossExpMs = extractMapDeadlineMs(mlp, nowMs);
+        }
+
+        // Проверяем также режимы боссов внутри /api/dungeon (kinds)
+        Map<String, Object> dngData = IdleArcApiClient.getCachedDungeonData();
+        if (dngData != null && bossExpMs <= 0) {
+            List<Object> kinds = SimpleJson.asList(dngData.get("kinds"));
+            if (kinds != null) {
+                for (Object ko : kinds) {
+                    Map<String, Object> km = SimpleJson.asMap(ko);
+                    if (km == null) continue;
+                    String kSlug = (SimpleJson.str(km, "slug", "") + " " + SimpleJson.str(km, "name", "")).toLowerCase(Locale.ROOT);
+                    if (kSlug.contains("boss") || kSlug.contains("raid") || kSlug.contains("trial")) {
+                        if (SimpleJson.bool(km, "can_enter", SimpleJson.bool(km, "ready", false))) {
+                            r.bossFightReady = true;
+                        }
+                        long kMs = extractMapDeadlineMs(km, nowMs);
+                        if (kMs > nowMs && (bossExpMs <= 0 || kMs < bossExpMs)) {
+                            bossExpMs = kMs;
+                        }
+                    }
+                }
+            }
+        }
+
+        boolean explicitBossReady = SimpleJson.bool(d, "canFightBoss", SimpleJson.bool(d, "boss_can_fight",
+                mlp != null && (SimpleJson.bool(mlp, "can_fight_boss", SimpleJson.bool(mlp, "boss_ready", false))
+                        || (reqKills > 0 && kills >= reqKills))));
+        if (bossExpMs > nowMs || bossOnCd) {
+            r.bossFightReady = false;
+            r.bossFightReadyAtMs = bossExpMs;
+            r.bossStatusNote = "На откате";
+        } else if (explicitBossReady || r.bossFightReady) {
+            r.bossFightReady = true;
+            r.bossFightReadyAtMs = 0L;
+            r.bossStatusNote = "✅ Босс открыт к вызову!";
+            r.activeAlerts.add("⚔️ Доступен Бой с Боссом!");
+        } else if (reqKills > 0) {
+            r.bossFightReady = false;
+            r.bossStatusNote = "Прогресс до Босса этажа: " + kills + " / " + reqKills + " убийств";
+        } else if (SimpleJson.bool(d, "monsterLevelPaused", false)) {
+            r.bossStatusNote = "Этаж на паузе — сними паузу для вызова Босса следующего этажа";
+        } else {
+            r.bossFightReady = true;
+            r.bossStatusNote = "Готов (отката нет)";
+        }
+
         // 1. Подземелье
         boolean onCd = SimpleJson.bool(d, "isDungeonOnCooldown", false);
         long expMs = parseFlexibleTimestampMs(d.get("dungeonCooldownExpirationTime"), nowMs);
@@ -78,8 +142,17 @@ public final class RadarTimeParser {
             r.dungeonReadyAtMs = expMs;
         }
 
-        // 2. Босс гильдии
+        // 2. Босс гильдии (+ точный таймер отката из /api/guild, если передан сервером)
         r.guildBossReady = SimpleJson.bool(d, "guild_boss_can_fight", false);
+        long gbExp = parseFlexibleTimestampMs(d.get("guild_boss_cooldown_until"), nowMs);
+        if (gbExp <= 0) {
+            Map<String, Object> gldRoot = IdleArcApiClient.getCachedGuildData();
+            Map<String, Object> gldObj = gldRoot != null ? SimpleJson.asMap(gldRoot.get("guild")) : SimpleJson.asMap(d.get("guild"));
+            if (gldObj != null) {
+                gbExp = extractMapDeadlineMs(gldObj, nowMs);
+            }
+        }
+        r.guildBossReadyAtMs = (!r.guildBossReady && gbExp > nowMs) ? gbExp : 0L;
         if (r.guildBossReady) {
             r.activeAlerts.add("👹 Доступна атака по Боссу гильдии!");
         }

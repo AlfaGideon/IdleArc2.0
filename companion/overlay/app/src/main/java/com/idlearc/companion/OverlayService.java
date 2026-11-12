@@ -210,7 +210,7 @@ public class OverlayService extends Service {
         titleCol.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView titleTv = new TextView(this);
-        titleTv.setText("⭐ IdleArcHelper v4.0");
+        titleTv.setText("⭐ IdleArcHelper v4.1");
         titleTv.setTextColor(Color.parseColor("#FFD54F"));
         titleTv.setTextSize(13.5f);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
@@ -548,7 +548,7 @@ public class OverlayService extends Service {
         Notification.Builder nb = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
-        Notification n = nb.setContentTitle("⭐ IdleArcHelper v4.0")
+        Notification n = nb.setContentTitle("⭐ IdleArcHelper v4.1")
                 .setContentText("Мультиклассовый помощник, Сумка и Будильник откатов активны")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .setContentIntent(pi)
