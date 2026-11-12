@@ -13,3 +13,9 @@ for k,arr in [('pet',(d.get('bonusStats') or {}).get('petDamageBreakdown') or []
  print('::notice::BREAKDOWN_KEYS='+json.dumps({'source':k,'keys':[x.get('key') for x in arr if isinstance(x,dict)]}))
 # Config keys and values are public and contain no account data.
 print('::notice::HARMONY_CFG='+json.dumps(c))
+bs=d.get('bonusStats') or {}; hero=d.get('attackDamageBreakdown') or {}
+def stance_entry(arr):
+ return next((x for x in arr if isinstance(x,dict) and x.get('key')=='stance'),{})
+p=stance_entry(bs.get('petDamageBreakdown') or []);a=stance_entry(hero.get('multiplicative') or [])
+def approx(x,y):return isinstance(x,(float,int)) and isinstance(y,(float,int)) and abs(x-y)<max(0.02,abs(y)*0.0001)
+print('::notice::HARMONY_UNITS='+json.dumps({'is_harmony':d.get('activeCombatStance')=='harmony','cap_approx_8000':approx(v,8000),'cap_approx_8100':approx(v,8100),'pet_stance_pct_present':isinstance(p.get('pct'),(float,int)),'hero_stance_pct_present':isinstance(a.get('pct'),(float,int)),'pct_equal':approx(p.get('pct'),a.get('pct')),'pet_le_cap':isinstance(p.get('pct'),(float,int)) and isinstance(v,(float,int)) and p['pct']<=v,'hero_mult_matches_pct':approx(a.get('mult'),1+(a.get('pct',0)/100))}))
