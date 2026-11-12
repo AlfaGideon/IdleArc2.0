@@ -35,6 +35,28 @@ public class MainActivity extends Activity {
     private DruidProfile profile;
     private TextView syncStatusTv;
     private Button syncNowBtn;
+    private Button liveBtn;
+    private boolean liveEnabled;
+    private boolean activityResumed;
+    private long lastInteractionMs;
+    private String liveStatus = "";
+    private ScrollView rootScrollView;
+    private final LiveSyncManager.Listener liveListener = new LiveSyncManager.Listener() {
+        @Override public void onLiveData() {
+            if (!activityResumed || !liveEnabled) return;
+            IdleArcApiClient.applyDashboardToProfile(IdleArcApiClient.getCachedDashboard(), profile);
+            if (android.os.SystemClock.uptimeMillis() - lastInteractionMs < 2000L) return;
+            final int y = rootScrollView != null ? rootScrollView.getScrollY() : 0;
+            refreshAllViews();
+            if (rootScrollView != null) rootScrollView.post(new Runnable() {
+                @Override public void run() { rootScrollView.scrollTo(0, y); }
+            });
+        }
+        @Override public void onLiveStatus(String status) {
+            liveStatus = status;
+            if (activityResumed && liveEnabled) updateLiveStatusText();
+        }
+    };
     private Button overlayBtn;
     private Button classPickerBtn;
     private LinearLayout cardsContainer;
@@ -57,11 +79,18 @@ public class MainActivity extends Activity {
     };
 
     @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+        lastInteractionMs = android.os.SystemClock.uptimeMillis();
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         profile = DruidProfile.load(this);
 
         ScrollView rootScroll = new ScrollView(this);
+        rootScrollView = rootScroll;
         rootScroll.setBackgroundColor(Color.parseColor("#080E14"));
 
         LinearLayout root = new LinearLayout(this);
@@ -145,6 +174,23 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         subTopLp.topMargin = dp(6);
         subTopRow.setLayoutParams(subTopLp);
+
+        liveBtn = DashboardCardRenderer.pillButton(this, "LIVE: выкл", "#20323A", "#B0BEC5");
+        liveBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (!liveEnabled && !IdleArcApiClient.hasSavedCredentials(MainActivity.this)) {
+                    showCredentialsDialog();
+                    return;
+                }
+                liveEnabled = !liveEnabled;
+                liveBtn.setText(liveEnabled ? "● LIVE 1с" : "LIVE: выкл");
+                if (liveEnabled && activityResumed) LiveSyncManager.get().add(MainActivity.this, MainActivity.this, liveListener);
+                else LiveSyncManager.get().remove(MainActivity.this);
+                if (!liveEnabled) liveStatus = "";
+                refreshAllViews();
+            }
+        });
+        subTopRow.addView(liveBtn, weightLp(5));
 
         classPickerBtn = DashboardCardRenderer.pillButton(
                 this, "🌟 Класс: Авто", "#221C35", "#FFE082");
@@ -278,9 +324,24 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
+        if (liveEnabled) LiveSyncManager.get().add(this, this, liveListener);
         OtaUpdater.resumePendingInstallIfPermitted(this);
         profile = DruidProfile.load(this);
         refreshAllViews();
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        LiveSyncManager.get().remove(this);
+        super.onPause();
+    }
+
+    private void updateLiveStatusText() {
+        if (syncStatusTv != null && liveEnabled && !liveStatus.isEmpty()) {
+            syncStatusTv.setText(liveStatus + " · только dashboard; сумка и таймеры — полное обновление API");
+        }
     }
 
     private void runOtaCheck(final boolean manual) {
@@ -334,7 +395,9 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void triggerApiSync(final boolean showToast) {
+    private void triggerApiSync(final boolean showToast) { triggerApiSync(showToast, 0); }
+
+    private void triggerApiSync(final boolean showToast, final int retry) {
         if (syncNowBtn != null && !syncNowBtn.isEnabled()) return;
         if (!IdleArcApiClient.hasSavedCredentials(this)) {
             showCredentialsDialog();
@@ -370,7 +433,17 @@ public class MainActivity extends Activity {
                         syncNowBtn.setText("🔄 Обновить API");
                         syncNowBtn.setEnabled(true);
                         refreshAllViews();
-                        Toast.makeText(MainActivity.this, "Ошибка API: " + errorMessage, Toast.LENGTH_LONG).show();
+                        if (showToast && IdleArcApiClient.SYNC_BUSY_MESSAGE.equals(errorMessage) && retry < 6 && activityResumed) {
+                            syncNowBtn.postDelayed(new Runnable() { @Override public void run() {
+                                if (activityResumed) triggerApiSync(true, retry + 1);
+                            }}, 300L);
+                            return;
+                        }
+                        if (showToast) {
+                            String message = IdleArcApiClient.SYNC_BUSY_MESSAGE.equals(errorMessage)
+                                    ? "Синхронизация уже идёт, повторите через секунду." : "Ошибка API: " + errorMessage;
+                            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                        }
                     }
                 });
             }
@@ -510,6 +583,7 @@ public class MainActivity extends Activity {
             syncStatusTv.setText("⚠️ Аккаунт ещё не подключён — нажми «🔑 Аккаунт» для входа в API idlearc.com");
         }
 
+        updateLiveStatusText();
         // Подсветка режима
         DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
         for (int i = 0; i < modes.length; i++) {

@@ -41,6 +41,12 @@ public class IdleArcApiClient {
     private static volatile long cachedBossFightStatusTimeMs = 0L;
     private static volatile Map<String, Object> cachedGuildData = null;
     private static volatile long lastSyncTimeMs = 0L;
+    private static final java.util.concurrent.atomic.AtomicBoolean SYNC_BUSY = new java.util.concurrent.atomic.AtomicBoolean();
+    public static final String SYNC_BUSY_MESSAGE = "SYNC_BUSY";
+    private static volatile long lastLivePersistMs = 0L;
+    private static long authGeneration = 0L;
+
+    public static boolean isSyncBusy() { return SYNC_BUSY.get(); }
 
     public interface ApiCallback {
         void onSuccess(ScreenAnalyzer.ScanResult scanResult);
@@ -64,8 +70,9 @@ public class IdleArcApiClient {
         return sp != null ? sp.getString("email", "") : "";
     }
 
-    public static void saveCredentials(Context ctx, String email, String password, String optionalBearerToken) {
+    public static synchronized void saveCredentials(Context ctx, String email, String password, String optionalBearerToken) {
         if (ctx == null) return;
+        authGeneration++;
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
         if (sp == null) return;
         SharedPreferences.Editor ed = sp.edit();
@@ -75,7 +82,8 @@ public class IdleArcApiClient {
         ed.apply();
     }
 
-    public static void clearCredentials(Context ctx) {
+    public static synchronized void clearCredentials(Context ctx) {
+        authGeneration++;
         cachedDashboard = null;
         cachedInventoryItems = new ArrayList<>();
         cachedInventoryTotalCount = 0;
@@ -216,6 +224,10 @@ public class IdleArcApiClient {
 
     /** Асинхронная синхронизация с https://idlearc.com/api/dashboard в фоновом потоке */
     public static void syncAsync(final Context ctx, final DruidProfile profile, final ApiCallback cb) {
+        if (!SYNC_BUSY.compareAndSet(false, true)) {
+            if (cb != null) cb.onError(SYNC_BUSY_MESSAGE);
+            return;
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -363,9 +375,74 @@ public class IdleArcApiClient {
                     if (cb != null) cb.onSuccess(sr);
                 } catch (Exception e) {
                     if (cb != null) cb.onError(e.getMessage() != null ? e.getMessage() : e.toString());
+                } finally {
+                    SYNC_BUSY.set(false);
                 }
             }
         }, "IdleArcApiSync").start();
+    }
+
+    /** Lightweight live poll: only the dashboard, never inventory or other endpoints. */
+    public static void syncDashboardAsync(final Context ctx, final ApiCallback cb) {
+        if (!SYNC_BUSY.compareAndSet(false, true)) {
+            if (cb != null) cb.onError(SYNC_BUSY_MESSAGE);
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (ctx == null) throw new Exception("Нет контекста приложения");
+                    SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
+                    final long generation;
+                    synchronized (IdleArcApiClient.class) { generation = authGeneration; }
+                    String token = sp.getString("bearer_token", "");
+                    String email = sp.getString("email", "");
+                    String password = sp.getString("password", "");
+                    if (token == null || token.isEmpty()) {
+                        if (email == null || email.isEmpty() || password == null || password.isEmpty())
+                            throw new Exception("Нет учётных данных API");
+                        token = loginForBearerToken(email, password);
+                        synchronized (IdleArcApiClient.class) {
+                            if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+                            sp.edit().putString("bearer_token", token).apply();
+                        }
+                    }
+                    String json;
+                    try { json = fetchDashboardJson(token); }
+                    catch (AuthExpiredException expired) {
+                        if (email == null || email.isEmpty() || password == null || password.isEmpty()) throw expired;
+                        token = loginForBearerToken(email, password);
+                        synchronized (IdleArcApiClient.class) {
+                            if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+                            sp.edit().putString("bearer_token", token).apply();
+                        }
+                        json = fetchDashboardJson(token);
+                    }
+                    Map<String, Object> dash = SimpleJson.parseObject(json);
+                    if (dash == null || dash.isEmpty()) throw new Exception("Сервер вернул пустой /api/dashboard");
+                    synchronized (IdleArcApiClient.class) {
+                        if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+                        long time = System.currentTimeMillis();
+                        Map<String, Object> prev = cachedDashboard;
+                        cachedDashboard = dash;
+                        lastSyncTimeMs = time;
+                        boolean persist = time - lastLivePersistMs >= 15_000L || time < lastLivePersistMs;
+                        SnapshotHistoryTracker.onNewDashboardSynced(ctx, prev, dash, time, persist);
+                        CatalystTracker.recordSync(ctx, dash, time);
+                        if (persist) {
+                            ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE).edit()
+                                    .putString("dashboard_json", json).putLong("sync_ts", time).apply();
+                            lastLivePersistMs = time;
+                        }
+                    }
+                    if (cb != null) cb.onSuccess(null);
+                } catch (Exception e) {
+                    if (cb != null) cb.onError(e.getMessage() != null ? e.getMessage() : e.toString());
+                } finally {
+                    SYNC_BUSY.set(false);
+                }
+            }
+        }, "IdleArcLiveDashboard").start();
     }
 
     private static final class AuthExpiredException extends Exception {

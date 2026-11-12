@@ -37,6 +37,7 @@ public final class DashboardCardRenderer {
         void onRequestSync();
     }
 
+    private static final java.util.WeakHashMap<Context, Map<String, Boolean>> expandedCards = new java.util.WeakHashMap<>();
     private static int activeItemBagFilter = 0; // 0 = Все, 1 = Уничтожить, 2 = Оставить
     private static int itemBagPage = 0;
     private static final int ITEM_BAG_PAGE_SIZE = 10;
@@ -1420,13 +1421,22 @@ public final class DashboardCardRenderer {
 
     public static View collapsibleCard(Context ctx, final String title, final View contentBody, boolean expandedByDefault) {
         LinearLayout card = makeCard(ctx, "#121C24", "#37474F");
-        final TextView header = cardTitle(ctx, (expandedByDefault ? "▾ " : "▸ ") + title, "#80DEEA");
-        contentBody.setVisibility(expandedByDefault ? View.VISIBLE : View.GONE);
+        Map<String, Boolean> states = expandedCards.get(ctx);
+        if (states == null) {
+            states = new java.util.HashMap<>();
+            expandedCards.put(ctx, states);
+        }
+        final Map<String, Boolean> cardStates = states;
+        Boolean prior = states.get(title);
+        boolean expanded = prior != null ? prior : expandedByDefault;
+        final TextView header = cardTitle(ctx, (expanded ? "▾ " : "▸ ") + title, "#80DEEA");
+        contentBody.setVisibility(expanded ? View.VISIBLE : View.GONE);
         header.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 boolean nowVis = contentBody.getVisibility() != View.VISIBLE;
                 contentBody.setVisibility(nowVis ? View.VISIBLE : View.GONE);
+                cardStates.put(title, nowVis);
                 header.setText((nowVis ? "▾ " : "▸ ") + title);
             }
         });

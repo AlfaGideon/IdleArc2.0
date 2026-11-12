@@ -36,8 +36,8 @@ OUT_DIR = ROOT / "releases"
 TOOLS_DIR = Path(os.environ.get("ANDROID_TOOLS_DIR", "/tmp/android-tools"))
 
 DEFAULT_CHANGELOG = (
-    "v4.7.0: карточка Гармонии показывает растущий максимум и текущие "
-    "множители атаки и питомца из API игры."
+    "v4.8.0: необязательный режим LIVE для частой синхронизации dashboard "
+    "в приложении и плавающем виджете, с защитой от перегрузки."
 )
 
 

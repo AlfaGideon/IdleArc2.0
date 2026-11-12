@@ -88,6 +88,21 @@ public class ApiClientSuite {
         public android.content.SharedPreferences getSharedPreferences(String n, int m) { return prefs; }
     }
 
+    static class FakeConnection extends java.net.HttpURLConnection {
+        static volatile java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        static volatile java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        static final java.util.List<String> paths = java.util.Collections.synchronizedList(new java.util.ArrayList<String>());
+        FakeConnection(java.net.URL url) { super(url); paths.add(url.getPath()); }
+        public void connect() {} public void disconnect() {} public boolean usingProxy() { return false; }
+        public int getResponseCode() { return 200; }
+        public java.io.InputStream getInputStream() throws java.io.IOException {
+            entered.countDown();
+            try { if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new java.io.IOException("blocked"); }
+            catch (InterruptedException e) { throw new java.io.IOException(e); }
+            return new java.io.ByteArrayInputStream("{\\"characterId\\":1,\\"level\\":10}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
     private static String inventoryPage(int page, int total, String nextKey) {
         int last = (total + 9) / 10;
         StringBuilder b = new StringBuilder("{\\"characterItemsPaginated\\":{\\"total\\":" + total
@@ -100,7 +115,7 @@ public class ApiClientSuite {
         return b.append("]}}").toString();
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         String syntheticDashboard = "{"
             + "\\"characterClassName\\":\\"Druid\\","
             + "\\"level\\":420,"
@@ -497,6 +512,46 @@ public class ApiClientSuite {
         BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(dash, fakeGems, p);
         check(petAdv.gemSynergyNotes.get(0).contains("КАП ДОП. УБИЙСТВА ЗАКРЫТ"), "Detects extra kill >= 100% cap on pets");
 
+        check(LivePollPolicy.failureDelayMs(1, false) == 5000 && LivePollPolicy.failureDelayMs(5, false) == 60000
+                && LivePollPolicy.failureDelayMs(1, true) == 60000, "live error and rate-limit backoff");
+        java.net.URL.setURLStreamHandlerFactory(protocol -> "https".equals(protocol) ? new java.net.URLStreamHandler() {
+            protected java.net.URLConnection openConnection(java.net.URL url) { return new FakeConnection(url); }
+        } : null);
+        MemContext liveCtx = new MemContext();
+        IdleArcApiClient.saveCredentials(liveCtx, "x", "", "synthetic-token");
+        java.util.concurrent.CountDownLatch doneLive = new java.util.concurrent.CountDownLatch(1);
+        final String[] liveError = {null};
+        IdleArcApiClient.syncDashboardAsync(liveCtx, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { doneLive.countDown(); }
+            public void onError(String err) { liveError[0] = err; doneLive.countDown(); }
+        });
+        check(FakeConnection.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "live request started");
+        final String[] busy = {null};
+        IdleArcApiClient.syncAsync(liveCtx, p, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) {}
+            public void onError(String err) { busy[0] = err; }
+        });
+        check(IdleArcApiClient.SYNC_BUSY_MESSAGE.equals(busy[0]), "full and live requests cannot overlap");
+        FakeConnection.release.countDown();
+        check(doneLive.await(5, java.util.concurrent.TimeUnit.SECONDS) && liveError[0] == null, "live snapshot succeeds");
+        check(FakeConnection.paths.size() == 1 && FakeConnection.paths.get(0).equals("/api/dashboard"), "live sync fetches only dashboard");
+        check(IdleArcApiClient.getLastSyncTimeMs() > 0, "live snapshot timestamp recorded");
+        // Give the worker's finally block time to release the single-flight gate.
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        FakeConnection.entered = new java.util.concurrent.CountDownLatch(1);
+        FakeConnection.release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch loggedOutLive = new java.util.concurrent.CountDownLatch(1);
+        final String[] cancelled = {null};
+        IdleArcApiClient.syncDashboardAsync(liveCtx, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { cancelled[0] = "unexpected success"; loggedOutLive.countDown(); }
+            public void onError(String err) { cancelled[0] = err; loggedOutLive.countDown(); }
+        });
+        check(FakeConnection.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "second live request started");
+        IdleArcApiClient.clearCredentials(liveCtx);
+        FakeConnection.release.countDown();
+        check(loggedOutLive.await(5, java.util.concurrent.TimeUnit.SECONDS) && cancelled[0] != null && IdleArcApiClient.getCachedDashboard() == null,
+                "logout invalidates in-flight live response");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -509,6 +564,7 @@ public class ApiClientSuite {
                 str(tmp / "android" / "content" / "SharedPreferences.java"),
                 str(SRC_DIR / "SimpleJson.java"),
                 str(SRC_DIR / "HarmonyInfo.java"),
+                str(SRC_DIR / "LivePollPolicy.java"),
                 str(SRC_DIR / "DruidProfile.java"),
                 str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "IdleArcOcrEngine.java"),

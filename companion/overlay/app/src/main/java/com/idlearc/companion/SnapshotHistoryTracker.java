@@ -73,6 +73,10 @@ public class SnapshotHistoryTracker {
 
     /** Вызывается при каждом успешном получении /api/dashboard */
     public static void onNewDashboardSynced(Context ctx, Map<String, Object> prevDash, Map<String, Object> newDash, long snapshotTimeMs) {
+        onNewDashboardSynced(ctx, prevDash, newDash, snapshotTimeMs, true);
+    }
+
+    public static void onNewDashboardSynced(Context ctx, Map<String, Object> prevDash, Map<String, Object> newDash, long snapshotTimeMs, boolean recordDaily) {
         if (newDash == null) return;
 
         // 1. Считаем дельту «До / После» относительно предыдущего слепка
@@ -96,6 +100,7 @@ public class SnapshotHistoryTracker {
             resetFarmSession(ctx, newDash, snapshotTimeMs);
         }
 
+        if (!recordDaily) return;
         // 3. Сохраняем дневную точку прогресса (YYYY-MM-DD)
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(now));
         int lvl = SimpleJson.intVal(newDash, "level", 1);

@@ -51,7 +51,28 @@ public class OverlayService extends Service {
     private DruidProfile profile;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private boolean syncInFlight = false;
-    private int autoSyncSec = 0; // 0 = выкл, 30, 60
+    private int autoSyncSec = 0; // 0 = выкл, 1 = LIVE dashboard, 30/60 = full sync
+    private String liveStatus = "";
+    private long lastInteractionMs;
+    private ScrollView bodyScrollView;
+    private final LiveSyncManager.Listener liveListener = new LiveSyncManager.Listener() {
+        @Override public void onLiveData() {
+            if (!running || autoSyncSec != 1) return;
+            IdleArcApiClient.applyDashboardToProfile(IdleArcApiClient.getCachedDashboard(), profile);
+            if (cardView != null && cardView.getVisibility() == View.VISIBLE
+                    && android.os.SystemClock.uptimeMillis() - lastInteractionMs >= 2000L) {
+                final int y = bodyScrollView != null ? bodyScrollView.getScrollY() : 0;
+                refreshPanelContent();
+                if (bodyScrollView != null) bodyScrollView.post(new Runnable() {
+                    @Override public void run() { bodyScrollView.scrollTo(0, y); }
+                });
+            }
+        }
+        @Override public void onLiveStatus(String status) {
+            liveStatus = status;
+            if (running && autoSyncSec == 1 && headerSubTv != null) headerSubTv.setText(status);
+        }
+    };
 
     private int activeTab = 0;
     private ApiDashboardEngine.EquippedSlotKey selectedSlot = ApiDashboardEngine.EquippedSlotKey.ALL;
@@ -118,7 +139,12 @@ public class OverlayService extends Service {
         winParams.x = dp(10);
         winParams.y = dp(130);
 
-        rootContainer = new FrameLayout(this);
+        rootContainer = new FrameLayout(this) {
+            @Override public boolean dispatchTouchEvent(MotionEvent event) {
+                lastInteractionMs = android.os.SystemClock.uptimeMillis();
+                return super.dispatchTouchEvent(event);
+            }
+        };
         bubbleView = buildBubbleView();
         cardView = buildExpandedCardView();
         cardView.setVisibility(View.GONE);
@@ -141,6 +167,7 @@ public class OverlayService extends Service {
     public void onDestroy() {
         running = false;
         uiHandler.removeCallbacks(autoSyncRunnable);
+        LiveSyncManager.get().remove(this);
         if (wm != null && rootContainer != null) {
             try {
                 wm.removeView(rootContainer);
@@ -324,6 +351,7 @@ public class OverlayService extends Service {
 
         // 5. Прокручиваемый контейнер визуальных карточек
         ScrollView bodyScroll = new ScrollView(this);
+        bodyScrollView = bodyScroll;
         bodyScroll.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, maxScrollH));
         cardsContainer = new LinearLayout(this);
@@ -336,13 +364,24 @@ public class OverlayService extends Service {
 
     private void cycleAutoSync() {
         uiHandler.removeCallbacks(autoSyncRunnable);
-        if (autoSyncSec == 0) {
-            autoSyncSec = 30;
-        } else if (autoSyncSec == 30) {
-            autoSyncSec = 60;
-        } else {
-            autoSyncSec = 0;
+        LiveSyncManager.get().remove(this);
+        if (autoSyncSec == 0) autoSyncSec = 1;
+        else if (autoSyncSec == 1) autoSyncSec = 30;
+        else if (autoSyncSec == 30) autoSyncSec = 60;
+        else autoSyncSec = 0;
+        if (autoSyncSec == 1) {
+            if (!IdleArcApiClient.hasSavedCredentials(this)) {
+                autoSyncSec = 0;
+                Toast.makeText(this, "Сначала подключи аккаунт в приложении", Toast.LENGTH_LONG).show();
+            } else {
+                autoSyncBtn.setText("● LIVE");
+                styleMini(autoSyncBtn, "#1B4332", "#69F0AE", true);
+                LiveSyncManager.get().add(this, this, liveListener);
+                Toast.makeText(this, "LIVE: dashboard примерно раз в секунду, пока виджет работает. Остальные данные обновляются кнопкой API.", Toast.LENGTH_LONG).show();
+                return;
+            }
         }
+        liveStatus = "";
         if (autoSyncSec > 0) {
             autoSyncBtn.setText("⏱ " + autoSyncSec + "с");
             styleMini(autoSyncBtn, "#1B4332", "#69F0AE", true);
@@ -351,9 +390,12 @@ public class OverlayService extends Service {
             autoSyncBtn.setText("⏱ Выкл");
             styleMini(autoSyncBtn, "#1B2834", "#B0BEC5", false);
         }
+        refreshPanelContent();
     }
 
-    private void triggerApiSync(final boolean showToast) {
+    private void triggerApiSync(final boolean showToast) { triggerApiSync(showToast, 0); }
+
+    private void triggerApiSync(final boolean showToast, final int retry) {
         if (syncInFlight) return;
         if (!IdleArcApiClient.hasSavedCredentials(this)) {
             Toast.makeText(this, "Открой Druid Helper и подключи аккаунт API", Toast.LENGTH_LONG).show();
@@ -388,8 +430,15 @@ public class OverlayService extends Service {
                     public void run() {
                         syncInFlight = false;
                         syncBtn.setText("🔄 API");
+                        if (showToast && IdleArcApiClient.SYNC_BUSY_MESSAGE.equals(errorMessage) && retry < 6 && running) {
+                            uiHandler.postDelayed(new Runnable() { @Override public void run() {
+                                if (running) triggerApiSync(true, retry + 1);
+                            }}, 300L);
+                            return;
+                        }
                         if (showToast) {
-                            Toast.makeText(OverlayService.this, "Ошибка API: " + errorMessage, Toast.LENGTH_LONG).show();
+                            Toast.makeText(OverlayService.this, IdleArcApiClient.SYNC_BUSY_MESSAGE.equals(errorMessage)
+                                    ? "Синхронизация уже идёт, повторите через секунду." : "Ошибка API: " + errorMessage, Toast.LENGTH_LONG).show();
                         }
                     }
                 });
@@ -410,6 +459,7 @@ public class OverlayService extends Service {
             headerSubTv.setText("Нет слепка — нажми 🔄 API");
         }
 
+        if (autoSyncSec == 1 && !liveStatus.isEmpty()) headerSubTv.setText(liveStatus);
         DruidProfile.BuildMode[] modes = DruidProfile.BuildMode.values();
         for (int i = 0; i < modes.length; i++) {
             boolean sel = (profile.mode == modes[i]);
