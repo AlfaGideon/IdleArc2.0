@@ -268,6 +268,22 @@ public class ApiClientSuite {
         for (int sid = 1; sid <= 90; sid++) {
             check(!HeroClassProfile.skillNameRu(sid, "").isEmpty(), "Skill RU #" + sid);
         }
+        Map<String,Object> harmonyDash = SimpleJson.parseObject("{\\"activeCombatStance\\":\\"harmony\\",\\"activeCombatStanceHarmonyMax\\":8000,\\"monsterLevelProgress\\":{\\"effective_fighting_level\\":310},\\"attackDamageBreakdown\\":{\\"multiplicative\\":[{\\"key\\":\\"stance\\",\\"pct\\":6400,\\"mult\\":65}]},\\"bonusStats\\":{\\"petDamageBreakdown\\":[{\\"key\\":\\"stance\\",\\"pct\\":6400}]}}");
+        HarmonyInfo harmony = HarmonyInfo.fromDashboard(harmonyDash);
+        check(harmony.active && harmony.monsterLevel == 310, "harmony snapshot and effective ML");
+        check(harmony.maximumBonusPct == 8000 && HarmonyInfo.formatMultiplier(harmony.maximumBonusPct).equals("×81.00"), "8000 percent is multiplier 81");
+        check(HarmonyInfo.formatMultiplier(harmony.heroBonusPct).equals("×65.00") && harmony.petBonusPct == 6400, "actual stance percentages read separately, no double multiplication");
+        harmonyDash.put("activeCombatStanceHarmonyMax", 20000.0);
+        check(HarmonyInfo.formatMultiplier(HarmonyInfo.fromDashboard(harmonyDash).maximumBonusPct).equals("×201.00"), "server cap grows without hardcoded 81 maximum");
+        harmonyDash.put("activeCombatStance", "beastmaster");
+        check(Double.isNaN(HarmonyInfo.fromDashboard(harmonyDash).petBonusPct)
+                && Double.isNaN(HarmonyInfo.fromDashboard(harmonyDash).maximumBonusPct), "other stance never mislabelled as harmony");
+        check(Double.isNaN(HarmonyInfo.fromDashboard(SimpleJson.parseObject("{} ")).maximumBonusPct), "missing cap remains unknown");
+        harmonyDash.put("activeCombatStance", "harmony");
+        harmonyDash.put("activeCombatStanceHarmonyMax", -1.0);
+        check(Double.isNaN(HarmonyInfo.fromDashboard(harmonyDash).maximumBonusPct), "invalid cap ignored");
+        check(HarmonyInfo.formatMultiplier(Double.NaN).equals("—"), "invalid multiplier displayed as unknown");
+
         String druidGuide = HeroClassProfile.buildClassGuide(HeroClassProfile.HeroClass.DRUID, DruidProfile.BuildMode.PUSH);
         check(druidGuide.contains("Гармони") && druidGuide.contains("Повелител") && !druidGuide.contains("Лучшая стойка:"), "druid stance guide does not assume a universally best stance");
         check(RuGameDictionary.stanceRu("harmony").equals("Гармония"), "harmony stance translated");
@@ -492,6 +508,7 @@ public class ApiClientSuite {
                 str(tmp / "android" / "content" / "Context.java"),
                 str(tmp / "android" / "content" / "SharedPreferences.java"),
                 str(SRC_DIR / "SimpleJson.java"),
+                str(SRC_DIR / "HarmonyInfo.java"),
                 str(SRC_DIR / "DruidProfile.java"),
                 str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "IdleArcOcrEngine.java"),

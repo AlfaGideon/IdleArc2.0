@@ -489,6 +489,35 @@ public final class DashboardCardRenderer {
         heroCard.addView(kpiRow);
         root.addView(heroCard);
 
+        // Harmony values come from the snapshot and already include the current stance.
+        HarmonyInfo harmony = HarmonyInfo.fromDashboard(dash);
+        if (hc == HeroClassProfile.HeroClass.DRUID || harmony.active) {
+            LinearLayout harmonyCard = makeCard(ctx, "#11252A", "#4DB6AC");
+            harmonyCard.addView(cardTitle(ctx, "⚖ Гармония", "#80CBC4"));
+            if (Double.isFinite(harmony.maximumBonusPct)) {
+                String mlLabel = harmony.monsterLevel > 0 ? " · ML " + harmony.monsterLevel : "";
+                harmonyCard.addView(bodyText(ctx, "Максимум при балансе 50/50: "
+                        + HarmonyInfo.formatMultiplier(harmony.maximumBonusPct) + mlLabel, "#80CBC4", 13f));
+                harmonyCard.addView(bodyText(ctx, "Потолок из API: +"
+                        + (harmony.maximumBonusPct >= 1e9
+                           ? String.format(Locale.US, "%.3e%%", harmony.maximumBonusPct)
+                           : String.format(Locale.US, "%.1f%%", harmony.maximumBonusPct))
+                        + ". Он зависит от текущих условий игры и обновляется со снимком API.", "#B0BEC5", 11.5f));
+            }
+            if (harmony.active && !Double.isFinite(harmony.maximumBonusPct)) {
+                harmonyCard.addView(bodyText(ctx, "Максимум при балансе 50/50: — (нет данных API)", "#B0BEC5", 11.5f));
+            }
+            if (harmony.active) {
+                harmonyCard.addView(bodyText(ctx, "Текущая стойка по API: атака "
+                        + HarmonyInfo.formatMultiplier(harmony.heroBonusPct) + " · питомец "
+                        + HarmonyInfo.formatMultiplier(harmony.petBonusPct), "#A5D6A7", 12f));
+                harmonyCard.addView(bodyText(ctx, "Эти множители уже учтены в данных игры. Не применяй их повторно; — означает, что данных нет.", "#B0BEC5", 11f));
+            } else {
+                harmonyCard.addView(bodyText(ctx, "Для текущих множителей включи «Гармонию» в игре и обнови API. Сравни стойки на одном противнике.", "#B0BEC5", 11f));
+            }
+            root.addView(harmonyCard);
+        }
+
         // 1b. Гайд механик активного класса и эталонный Бонус дропа
         LinearLayout clsCard = makeCard(ctx, "#141D2B", "#7E57C2");
         clsCard.addView(cardTitle(ctx, hc.icon + " Профиль класса «" + hc.ruName + "» и главный Бонус дропа", "#D1C4E9"));
