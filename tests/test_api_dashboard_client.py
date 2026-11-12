@@ -381,6 +381,37 @@ public class ApiClientSuite {
         check(CatalystTracker.analyze(cDash1, disabledCatalyst, 1000).meanHours < 0, "disabled catalyst cannot show a time");
 
 
+        // Session rates use snapshot timestamps and signed net changes, not the UI clock.
+        MemContext farmCtx = new MemContext();
+        long t0 = 1000000L;
+        Map<String, Object> farm1 = SimpleJson.parseObject("{\\"characterId\\":1,\\"goldAmountStr\\":\\"9007199254740993000000\\",\\"gemDustStr\\":\\"500\\",\\"rubyAmount\\":100,\\"level\\":300,\\"levelProgress\\":25}");
+        Map<String, Object> farm2 = SimpleJson.parseObject("{\\"characterId\\":1,\\"goldAmountStr\\":\\"9007199254740993000010\\",\\"gemDustStr\\":\\"500\\",\\"rubyAmount\\":99,\\"level\\":300,\\"levelProgress\\":75}");
+        SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, null, farm1, t0);
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farm1, t0).active, "first snapshot has no rate");
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farm1, t0).active, "old snapshot never becomes a rate as wall clock advances");
+        SnapshotHistoryTracker.SessionRates farmRate = SnapshotHistoryTracker.getSessionRates(farmCtx, farm2, t0 + 60000);
+        check(farmRate.active && Math.abs(farmRate.elapsedMinutes - 1) < 0.001, "snapshot interval used for rate");
+        check(Math.abs(farmRate.goldPerHour - 600) < 0.001, "exact gold string avoids floating point loss");
+        check(farmRate.dustPerHour == 0 && farmRate.rubiesPerHour == -60 && Double.isNaN(farmRate.shardsPerHour), "spending remains negative; missing resource remains unknown");
+        check(Math.abs(farmRate.levelsPerHour - 30) < 0.001, "level percentage converted to estimated levels per hour");
+        SnapshotHistoryTracker.SessionRates sameRate = SnapshotHistoryTracker.getSessionRates(farmCtx, farm2, t0 + 60000);
+        check(sameRate.goldPerHour == farmRate.goldPerHour && sameRate.elapsedMinutes == farmRate.elapsedMinutes, "redraw does not change rates");
+        SnapshotHistoryTracker.requestFarmSessionReset(farmCtx, t0 + 70000);
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farm2, t0 + 60000).active, "reset waits for fresh snapshot");
+        SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, farm1, farm2, t0 + 60000);
+        check(SnapshotHistoryTracker.isFarmResetPending(farmCtx), "older in-flight snapshot does not finish reset");
+        SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, farm1, farm2, t0 + 80000);
+        check(!SnapshotHistoryTracker.isFarmResetPending(farmCtx) && !SnapshotHistoryTracker.getSessionRates(farmCtx, farm2, t0 + 80000).active, "fresh snapshot starts reset session");
+        Map<String, Object> farmOther = SimpleJson.parseObject("{\\"characterId\\":2,\\"goldAmount\\":100}");
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 200000).active, "never mix characters");
+        SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, farm2, farmOther, t0 + 200000);
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 200000).active, "character switch starts a new session");
+        SnapshotHistoryTracker.clearFarmSession(farmCtx);
+        check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 300000).active, "logout clears farm session");
+        Map<String, Object> hugeWithoutString = SimpleJson.parseObject("{\\"characterId\\":2,\\"goldAmount\\":9007199254740993000000}");
+        SnapshotHistoryTracker.resetFarmSession(farmCtx, hugeWithoutString, t0);
+        check(Double.isNaN(SnapshotHistoryTracker.getSessionRates(farmCtx, hugeWithoutString, t0 + 60000).goldPerHour), "inexact large numbers are not presented as exact gain");
+
         // Проверка отката Боя с Боссом в RadarTimeParser
         Map<String, Object> bossDash = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs / 1000L) + 1800L) + "}");
         RadarTimeParser.RadarState bossRs = RadarTimeParser.parseRadar(bossDash, nowMs);

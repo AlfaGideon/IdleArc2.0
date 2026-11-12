@@ -87,6 +87,7 @@ public class IdleArcApiClient {
         lastSyncTimeMs = 0L;
         if (ctx == null) return;
         CatalystTracker.clear(ctx);
+        SnapshotHistoryTracker.clearFarmSession(ctx);
         SharedPreferences alarms = ctx.getSharedPreferences("druid_helper_alarms_v31", Context.MODE_PRIVATE);
         if (alarms != null) alarms.edit().putLong("manual_boss_deadline", 0L).apply();
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
@@ -253,7 +254,7 @@ public class IdleArcApiClient {
                     cachedDashboard = dash;
                     lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
-                    SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash);
+                    SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash, lastSyncTimeMs);
                     CatalystTracker.recordSync(ctx, dash, lastSyncTimeMs);
                     // Дополнительно загружаем Инвентарь (/api/inventory), Мешок камней (/api/gems), Данжи/Боссов (/api/dungeon) и Гильдию (/api/guild)
                     String gemsJson = "";

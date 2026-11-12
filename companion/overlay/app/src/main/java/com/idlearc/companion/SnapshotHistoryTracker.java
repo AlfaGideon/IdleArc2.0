@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.text.SimpleDateFormat;
+import java.math.BigDecimal;
+import java.math.MathContext;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -70,7 +72,7 @@ public class SnapshotHistoryTracker {
     }
 
     /** Вызывается при каждом успешном получении /api/dashboard */
-    public static void onNewDashboardSynced(Context ctx, Map<String, Object> prevDash, Map<String, Object> newDash) {
+    public static void onNewDashboardSynced(Context ctx, Map<String, Object> prevDash, Map<String, Object> newDash, long snapshotTimeMs) {
         if (newDash == null) return;
 
         // 1. Считаем дельту «До / После» относительно предыдущего слепка
@@ -84,8 +86,14 @@ public class SnapshotHistoryTracker {
 
         long now = System.currentTimeMillis();
         // 2. Инициализируем старт фарм-сессии, если ещё не задан
-        if (sp.getLong("sess_start_ms", 0L) <= 0L) {
-            resetFarmSession(ctx, newDash);
+        String character = SimpleJson.str(newDash, "characterId", "");
+        long start = sp.getLong("farm_start_v2", 0L);
+        boolean pending = sp.getBoolean("farm_reset_pending_v2", false);
+        long resetRequestedMs = sp.getLong("farm_reset_requested_v2", 0L);
+        if (!character.isEmpty() && snapshotTimeMs > 0 && (!pending || snapshotTimeMs >= resetRequestedMs)
+                && (start <= 0 || snapshotTimeMs < start
+                || !character.equals(sp.getString("farm_character_v2", "")) || pending)) {
+            resetFarmSession(ctx, newDash, snapshotTimeMs);
         }
 
         // 3. Сохраняем дневную точку прогресса (YYYY-MM-DD)
@@ -174,53 +182,102 @@ public class SnapshotHistoryTracker {
         }
     }
 
-    public static void resetFarmSession(Context ctx, Map<String, Object> dash) {
-        if (ctx == null || dash == null) return;
+    /** Start a new session on the next successful server snapshot, not an old cached balance. */
+    public static void requestFarmSessionReset(Context ctx) {
+        requestFarmSessionReset(ctx, System.currentTimeMillis());
+    }
+
+    public static void requestFarmSessionReset(Context ctx, long requestedMs) {
+        if (ctx == null) return;
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (sp != null) sp.edit().putBoolean("farm_reset_pending_v2", true)
+                .putLong("farm_reset_requested_v2", requestedMs).apply();
+    }
+
+    public static boolean isFarmResetPending(Context ctx) {
+        if (ctx == null) return false;
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        return sp != null && sp.getBoolean("farm_reset_pending_v2", false);
+    }
+
+    public static void clearFarmSession(Context ctx) {
+        if (ctx == null) return;
+        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (sp != null) sp.edit().putLong("farm_start_v2", 0L)
+                .putString("farm_character_v2", "").putBoolean("farm_reset_pending_v2", false).apply();
+    }
+
+    public static void resetFarmSession(Context ctx, Map<String, Object> dash, long snapshotTimeMs) {
+        if (ctx == null || dash == null || snapshotTimeMs <= 0) return;
+        String character = SimpleJson.str(dash, "characterId", "");
+        if (character.isEmpty()) return;
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (sp == null) return;
-        double lvlFrac = SimpleJson.num(dash, "level", 1.0) + SimpleJson.num(dash, "levelProgress", 0.0) / 100.0;
-        sp.edit()
-          .putLong("sess_start_ms", System.currentTimeMillis())
-          .putString("sess_gold", String.valueOf(SimpleJson.num(dash, "goldAmount", 0.0)))
-          .putString("sess_dust", String.valueOf(SimpleJson.num(dash, "gemDust", 0.0)))
-          .putString("sess_shards", String.valueOf(SimpleJson.num(dash, "petShardsAmount", 0.0)))
-          .putString("sess_rubies", String.valueOf(SimpleJson.num(dash, "rubyAmount", 0.0)))
-          .putString("sess_lvl", String.valueOf(lvlFrac))
-          .apply();
+        sp.edit().putLong("farm_start_v2", snapshotTimeMs)
+                .putString("farm_character_v2", character)
+                .putBoolean("farm_reset_pending_v2", false)
+                .putString("farm_gold_v2", serialize(resource(dash, "goldAmount", "goldAmountStr")))
+                .putString("farm_dust_v2", serialize(resource(dash, "gemDust", "gemDustStr")))
+                .putString("farm_shards_v2", serialize(resource(dash, "petShardsAmount", "petShardsAmountStr")))
+                .putString("farm_rubies_v2", serialize(resource(dash, "rubyAmount", "rubyAmountStr")))
+                .putString("farm_level_v2", serialize(levelFraction(dash)))
+                .apply();
     }
 
     public static SessionRates getSessionRates(Context ctx, Map<String, Object> dash) {
-        if (ctx == null || dash == null) {
-            return new SessionRates(false, 0, 0, 0, 0, 0, 0);
-        }
+        return getSessionRates(ctx, dash, IdleArcApiClient.getLastSyncTimeMs());
+    }
+
+    public static SessionRates getSessionRates(Context ctx, Map<String, Object> dash, long snapshotTimeMs) {
+        if (ctx == null || dash == null) return unavailable(0);
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (sp == null) return new SessionRates(false, 0, 0, 0, 0, 0, 0);
-        long startMs = sp.getLong("sess_start_ms", 0L);
-        long elapsedMs = System.currentTimeMillis() - startMs;
-        if (startMs <= 0L || elapsedMs < 30_000L) {
-            return new SessionRates(false, Math.max(0.0, elapsedMs / 60000.0), 0, 0, 0, 0, 0);
-        }
-        double hours = elapsedMs / 3_600_000.0;
-        double sGold = parseD(sp.getString("sess_gold", "0"));
-        double sDust = parseD(sp.getString("sess_dust", "0"));
-        double sShards = parseD(sp.getString("sess_shards", "0"));
-        double sRubies = parseD(sp.getString("sess_rubies", "0"));
-        double sLvl = parseD(sp.getString("sess_lvl", "0"));
+        if (sp == null || sp.getBoolean("farm_reset_pending_v2", false)) return unavailable(0);
+        long start = sp.getLong("farm_start_v2", 0L);
+        String character = SimpleJson.str(dash, "characterId", "");
+        if (start <= 0 || character.isEmpty() || !character.equals(sp.getString("farm_character_v2", ""))) return unavailable(0);
+        long elapsedMs = snapshotTimeMs - start;
+        if (elapsedMs < 30_000L) return unavailable(Math.max(0, elapsedMs) / 60000.0);
+        return new SessionRates(true, elapsedMs / 60000.0,
+                hourly(sp, "farm_gold_v2", resource(dash, "goldAmount", "goldAmountStr"), elapsedMs),
+                hourly(sp, "farm_dust_v2", resource(dash, "gemDust", "gemDustStr"), elapsedMs),
+                hourly(sp, "farm_shards_v2", resource(dash, "petShardsAmount", "petShardsAmountStr"), elapsedMs),
+                hourly(sp, "farm_rubies_v2", resource(dash, "rubyAmount", "rubyAmountStr"), elapsedMs),
+                hourly(sp, "farm_level_v2", levelFraction(dash), elapsedMs));
+    }
 
-        double curGold = SimpleJson.num(dash, "goldAmount", 0.0);
-        double curDust = SimpleJson.num(dash, "gemDust", 0.0);
-        double curShards = SimpleJson.num(dash, "petShardsAmount", 0.0);
-        double curRubies = SimpleJson.num(dash, "rubyAmount", 0.0);
-        double curLvl = SimpleJson.num(dash, "level", 1.0) + SimpleJson.num(dash, "levelProgress", 0.0) / 100.0;
+    private static SessionRates unavailable(double minutes) {
+        return new SessionRates(false, minutes, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+    }
 
-        return new SessionRates(
-                true,
-                elapsedMs / 60000.0,
-                Math.max(0.0, (curGold - sGold) / hours),
-                Math.max(0.0, (curDust - sDust) / hours),
-                Math.max(0.0, (curShards - sShards) / hours),
-                Math.max(0.0, (curRubies - sRubies) / hours),
-                Math.max(0.0, (curLvl - sLvl) / hours));
+    private static String serialize(BigDecimal value) { return value == null ? "" : value.toString(); }
+
+    private static BigDecimal decimal(Object raw, boolean exactString) {
+        if (!(raw instanceof Number) && !(raw instanceof String)) return null;
+        if (raw instanceof Number && !exactString && Math.abs(((Number) raw).doubleValue()) > 9_007_199_254_740_992d) return null;
+        try { return new BigDecimal(String.valueOf(raw).trim()); }
+        catch (NumberFormatException ignored) { return null; }
+    }
+
+    /** Prefer the exact server string: JSON numbers have already been parsed as doubles. */
+    private static BigDecimal resource(Map<String, Object> dash, String key, String exactKey) {
+        BigDecimal exact = decimal(dash.get(exactKey), true);
+        return exact != null ? exact : decimal(dash.get(key), false);
+    }
+
+    private static BigDecimal levelFraction(Map<String, Object> dash) {
+        BigDecimal level = decimal(dash.get("level"), false);
+        BigDecimal progress = decimal(dash.get("levelProgress"), false);
+        if (level == null || progress == null || level.signum() < 0
+                || progress.signum() < 0 || progress.compareTo(BigDecimal.valueOf(100)) > 0) return null;
+        return level.add(progress.movePointLeft(2));
+    }
+
+    private static double hourly(SharedPreferences sp, String key, BigDecimal current, long elapsedMs) {
+        BigDecimal start = decimal(sp.getString(key, ""), true);
+        if (start == null || current == null || elapsedMs <= 0) return Double.NaN;
+        double result = current.subtract(start).multiply(BigDecimal.valueOf(3_600_000L))
+                .divide(BigDecimal.valueOf(elapsedMs), MathContext.DECIMAL128).doubleValue();
+        return Double.isFinite(result) ? result : Double.NaN;
     }
 
     public static List<DailyPoint> getDailyJournal(Context ctx) {

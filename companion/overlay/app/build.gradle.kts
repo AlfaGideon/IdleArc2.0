@@ -9,8 +9,8 @@ android {
         applicationId = "com.idlearc.companion"
         minSdk = 24
         targetSdk = 34
-        versionCode = 430
-        versionName = "4.3.0"
+        versionCode = 440
+        versionName = "4.4.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

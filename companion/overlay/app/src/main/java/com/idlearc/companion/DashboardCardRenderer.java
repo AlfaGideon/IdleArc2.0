@@ -34,6 +34,7 @@ public final class DashboardCardRenderer {
 
     public interface UiRefreshCallback {
         void onRequestRefresh();
+        void onRequestSync();
     }
 
     private static int activeItemBagFilter = 0; // 0 = Все, 1 = Уничтожить, 2 = Оставить
@@ -296,44 +297,51 @@ public final class DashboardCardRenderer {
             root.addView(combatCard);
         }
 
-        // 3. Живой счётчик фарм-сессии (доход в час)
+        // Считаем изменение баланса только между двумя успешно полученными слепками.
         SnapshotHistoryTracker.SessionRates rates = SnapshotHistoryTracker.getSessionRates(ctx, dash);
         LinearLayout farmCard = makeCard(ctx, "#121C24", "#2C4237");
         LinearLayout fHead = row(ctx);
-        TextView fTitle = cardTitle(ctx, "📈 Доход фарм-сессии в час", "#A5D6A7");
+        TextView fTitle = cardTitle(ctx, "📈 Фарм-сессия: изменение баланса /ч", "#A5D6A7");
         fTitle.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         fHead.addView(fTitle);
         Button resetBtn = pillButton(ctx, "🔄 Сброс замера", "#1E2D38", "#B0BEC5");
         resetBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                SnapshotHistoryTracker.resetFarmSession(ctx, dash);
-                if (refreshCb != null) refreshCb.onRequestRefresh();
+            @Override public void onClick(View v) {
+                SnapshotHistoryTracker.requestFarmSessionReset(ctx);
+                if (refreshCb != null) {
+                    refreshCb.onRequestRefresh();
+                    refreshCb.onRequestSync();
+                }
             }
         });
         fHead.addView(resetBtn);
         farmCard.addView(fHead);
 
-        if (!rates.active) {
+        if (SnapshotHistoryTracker.isFarmResetPending(ctx)) {
+            farmCard.addView(bodyText(ctx, "Ожидаю обновление API для начала нового замера. Если оно не началось, нажми «Обновить API».", "#90A4AE", 12f));
+        } else if (!rates.active) {
             farmCard.addView(bodyText(ctx,
-                    "Точка отсчёта поставлена! Поиграй 1–2 минуты и нажми «🔄 Обновить API» — здесь появятся точные Золото/ч, Пыль/ч, Осколки/ч и Рубины/ч.",
+                    "Нужны два снимка: обнови API, подожди хотя бы 30 секунд и обнови снова. Для более стабильной оценки подожди 1–2 минуты.",
                     "#90A4AE", 12f));
         } else {
-            farmCard.addView(bodyText(ctx, String.format(Locale.US, "Время замера: %.0f мин", rates.elapsedMinutes), "#80CBC4", 11.5f));
+            long syncTime = IdleArcApiClient.getLastSyncTimeMs();
+            String syncLabel = syncTime > 0 ? new java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new java.util.Date(syncTime)) : "—";
+            farmCard.addView(bodyText(ctx, String.format(Locale.US, "Между снимками: %.1f мин · последнее обновление: %s", rates.elapsedMinutes, syncLabel), "#80CBC4", 11.5f));
             LinearLayout g1 = row(ctx);
-            g1.addView(statTile(ctx, "🪙 Золото/ч", RuGameDictionary.fmtBig(rates.goldPerHour), "#FFD54F"));
+            g1.addView(statTile(ctx, "🪙 Золото/ч", farmRateText(rates.goldPerHour, false), "#FFD54F"));
             addSpace(ctx, g1, 6);
-            g1.addView(statTile(ctx, "✨ Пыль/ч", RuGameDictionary.fmtBig(rates.dustPerHour), "#81D4FA"));
+            g1.addView(statTile(ctx, "✨ Пыль/ч", farmRateText(rates.dustPerHour, false), "#81D4FA"));
             farmCard.addView(g1);
-
             LinearLayout g2 = row(ctx);
             g2.setPadding(0, dp(ctx, 6), 0, 0);
-            g2.addView(statTile(ctx, "🐾 Осколки/ч", RuGameDictionary.fmtBig(rates.shardsPerHour), "#CE93D8"));
+            g2.addView(statTile(ctx, "🐾 Осколки/ч", farmRateText(rates.shardsPerHour, false), "#CE93D8"));
             addSpace(ctx, g2, 6);
-            g2.addView(statTile(ctx, "💎 Рубины/ч", String.format(Locale.US, "%.1f", rates.rubiesPerHour), "#FF8A80"));
+            g2.addView(statTile(ctx, "💎 Рубины/ч", farmRateText(rates.rubiesPerHour, true), "#FF8A80"));
             addSpace(ctx, g2, 6);
-            g2.addView(statTile(ctx, "🆙 Уровней/ч", String.format(Locale.US, "%.2f", rates.levelsPerHour), "#69F0AE"));
+            g2.addView(statTile(ctx, "🆙 Уровней/ч", farmRateText(rates.levelsPerHour, true), "#69F0AE"));
             farmCard.addView(g2);
+            farmCard.addView(bodyText(ctx, "Это среднее изменение баланса между снимками, а не чистый дроп: учитываются траты, покупки, награды и перерывы. Минус означает уменьшение запаса. Уровни/ч приблизительны из-за округления прогресса игрой.", "#B0BEC5", 11.5f));
+            farmCard.addView(bodyText(ctx, "Значения пересчитываются только после обновления API; — означает, что данных недостаточно.", "#90A4AE", 11f));
         }
         root.addView(farmCard);
 
@@ -351,6 +359,15 @@ public final class DashboardCardRenderer {
             }
         }
         root.addView(sigCard);
+    }
+
+    private static String farmRateText(double value, boolean precise) {
+        if (!Double.isFinite(value)) return "—";
+        String sign = value > 0 ? "+" : "";
+        if (value != 0 && Math.abs(value) < 0.01) return sign + String.format(Locale.US, "%.3g", value);
+        if ((precise && Math.abs(value) < 1000) || (value != 0 && Math.abs(value) < 1))
+            return sign + String.format(Locale.US, "%.2f", value);
+        return sign + RuGameDictionary.fmtBig(value);
     }
 
     private static void addTimerAlarmRow(final Context ctx,

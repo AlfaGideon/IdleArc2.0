@@ -335,6 +335,7 @@ public class MainActivity extends Activity {
     }
 
     private void triggerApiSync(final boolean showToast) {
+        if (syncNowBtn != null && !syncNowBtn.isEnabled()) return;
         if (!IdleArcApiClient.hasSavedCredentials(this)) {
             showCredentialsDialog();
             return;
@@ -530,6 +531,10 @@ public class MainActivity extends Activity {
             @Override
             public void onRequestRefresh() {
                 refreshAllViews();
+            }
+            @Override
+            public void onRequestSync() {
+                triggerApiSync(true);
             }
         };
 

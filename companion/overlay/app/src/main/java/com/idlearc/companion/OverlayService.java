@@ -434,6 +434,10 @@ public class OverlayService extends Service {
             public void onRequestRefresh() {
                 refreshPanelContent();
             }
+            @Override
+            public void onRequestSync() {
+                triggerApiSync(true);
+            }
         };
 
         switch (activeTab) {
