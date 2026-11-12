@@ -39,31 +39,6 @@ first = inv_info(get('/api/inventory'))
 if first is None:
     raise RuntimeError('Missing inventory page')
 first_ids = {str(x.get('id')) for x in first['data'] if isinstance(x, dict) and x.get('id') is not None}
-params = ['page', 'items_page', 'character_items_page', 'inventory_page', 'item_page',
-          'characterItemsPage', 'characterItemsPaginated_page', 'itemsPage', 'inventoryPage',
-          'inventory', 'inventory_page_number', 'itemPage', 'character_item_page',
-          'characterItems', 'p', 'current_page', 'page_number', 'pageNumber',
-          'character_items', 'items', 'inventoryPageNumber', 'character_items_paginated_page']
-results = {}
-for key in params:
-    pag = inv_info(get('/api/inventory?' + urlencode({key: 2})))
-    if pag is None:
-        results[key] = 'error'
-        continue
-    ids = {str(x.get('id')) for x in pag['data'] if isinstance(x, dict) and x.get('id') is not None}
-    results[key] = {'page': pag.get('current_page'), 'count': len(pag['data']), 'new': len(ids - first_ids)}
-for key in ('per_page', 'perPage', 'limit', 'pageSize', 'page_size'):
-    pag = inv_info(get('/api/inventory?' + urlencode({key: 100})))
-    results[key + '=100'] = {'page': pag.get('current_page'), 'count': len(pag['data'])} if pag else 'error'
-for name, extra in [('xhr', {'X-Requested-With': 'XMLHttpRequest'}),
-                    ('json_charset', {'Accept': 'application/json, text/plain, */*'})]:
-    pag = inv_info(get('/api/inventory?page=2', extra))
-    ids = {str(x.get('id')) for x in pag['data'] if isinstance(x, dict) and x.get('id') is not None} if pag else set()
-    results[name] = {'page': pag.get('current_page'), 'count': len(pag['data']), 'new': len(ids - first_ids)} if pag else 'error'
-for i in range(0, len(results), 10):
-    pass # pagination results verified in previous run
-
-
 # Print field names only; values and player-specific guild details stay private.
 def timing_keys(value, prefix='', depth=0):
     if depth > 3:
@@ -124,9 +99,10 @@ try:
         for match in re.findall(rb'[ -~]{4,160}', blob):
             text = match.decode('ascii')
             low = text.lower()
-            if any(w in low for w in ('inventory', 'itemspage', 'items_page', 'characteritems', 'page=')):
+            if any(w in low for w in ('inventory', 'item', 'gear', 'preset')):
                 if len(text) <= 100 and re.fullmatch(r'[a-zA-Z0-9_./?=&:-]+', text) and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
-                    strings.add(text)
+                    if '/' in text or '?' in text or 'allcharacteritems' in low:
+                        strings.add(text)
         print('::notice::APP_ROUTES=' + json.dumps(sorted(routes))[:1800])
         matches = sorted(strings, key=str.lower)
         for i in range(0, min(len(matches), 84), 12):
