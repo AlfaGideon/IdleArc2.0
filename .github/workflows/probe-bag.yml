@@ -1,0 +1,18 @@
+name: Probe Bag Pagination
+on:
+  push:
+    branches:
+      - "arena/**"
+    paths:
+      - "tools/probe_bag_pagination.py"
+      - ".github/workflows/probe-bag.yml"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run bag pagination & drop bonus probe
+        env:
+          IDLEARC_EMAIL: ${{ secrets.IDLEARC_EMAIL }}
+          IDLEARC_PASSWORD: ${{ secrets.IDLEARC_PASSWORD }}
+        run: python3 tools/probe_bag_pagination.py
