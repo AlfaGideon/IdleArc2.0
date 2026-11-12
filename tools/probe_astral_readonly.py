@@ -1,57 +1,50 @@
 #!/usr/bin/env python3
-"""Inspect read-only public game schemas and the authenticated account's catalyst fields."""
-import io, json, os, re, zipfile
+import io,json,os,re,zipfile
 from curl_cffi import requests
-s = requests.Session(impersonate='chrome124')
-base = 'https://idlearc.com'
-r = s.post(base + '/api/login', json={'email': os.environ['IDLEARC_EMAIL'], 'password': os.environ['IDLEARC_PASSWORD'], 'device_name':'IdleArcHelper diagnostics'}, headers={'Accept':'application/json'}, timeout=20)
-if r.status_code not in (200, 201) or not r.json().get('token'):
-    raise RuntimeError('Login failed, HTTP ' + str(r.status_code))
-h = {'Accept':'application/json', 'Authorization':'Bearer ' + r.json()['token']}
+s=requests.Session(impersonate='chrome124'); base='https://idlearc.com'
+r=s.post(base+'/api/login',json={'email':os.environ['IDLEARC_EMAIL'],'password':os.environ['IDLEARC_PASSWORD'],'device_name':'IdleArcHelper diagnostics'},headers={'Accept':'application/json'},timeout=20)
+if r.status_code not in (200,201) or not r.json().get('token'): raise RuntimeError('Login failed')
+h={'Accept':'application/json','Authorization':'Bearer '+r.json()['token']}
+def get(p):
+ r=s.get(base+p,headers=h,timeout=20)
+ return r.json() if r.status_code==200 else None
 
-def scan(v, path='', depth=0):
-    if depth > 8: return []
-    result = []
-    if isinstance(v, dict):
-        for k, x in v.items():
-            p = path + '.' + str(k)
-            if any(t in str(k).lower() for t in ('astral','catalyst','catalys')):
-                if isinstance(x, (int, float, bool, str, type(None))):
-                    result.append([p, x])
-                elif isinstance(x, dict):
-                    result.append([p, {a:b for a,b in x.items() if isinstance(b, (int, float, bool, type(None))) or (isinstance(b,str) and len(b)<60)}])
-                elif isinstance(x, list): result.append([p, 'list:' + str(len(x))])
-            if isinstance(x, (dict, list)): result.extend(scan(x,p,depth+1))
-    elif isinstance(v, list):
-        for x in v[:100]:
-            if isinstance(x, dict) and any('catalys' in str(x.get(k,'')).lower() or 'astral' in str(x.get(k,'')).lower() for k in ('name','slug','type','key')):
-                result.append([path+'[]', {k:v for k,v in x.items() if isinstance(v, (int, float, bool, type(None))) or (k in ('name','slug','type','key') and isinstance(v,str))}])
-            result.extend(scan(x,path+'[]',depth+1))
-    return result
+def keys(v,p='',depth=0):
+ if depth>5:return []
+ out=[]
+ if isinstance(v,dict):
+  for k,x in v.items():
+   path=p+'.'+k
+   if any(t in k.lower() for t in ('pity','kill','drop','catalys','astral')):
+    out.append([path, x if isinstance(x,(int,float,bool,type(None))) else type(x).__name__])
+   if isinstance(x,(dict,list)):out.extend(keys(x,path,depth+1))
+ elif isinstance(v,list):
+  for x in v[:10]:out.extend(keys(x,p+'[]',depth+1))
+ return out
 
-for path in ('/api/dashboard', '/api/config/game', '/api/inventory', '/api/forge', '/api/materials', '/api/arcstone-ascent/status', '/api/boss-fight/status'):
-    try:
-        r=s.get(base+path,headers=h,timeout=20)
-        found=scan(r.json()) if r.status_code==200 else []
-        print('::notice::ASTRAL_API='+json.dumps({'path':path,'status':r.status_code,'found':found},ensure_ascii=False,separators=(',',':'))[:1800])
-    except Exception as e: print('::notice::ASTRAL_API='+json.dumps({'path':path,'error':type(e).__name__}))
-
+dash=get('/api/dashboard'); material=get('/api/materials'); config=get('/api/config/game')
+for name,data in [('dashboard',dash),('materials',material)]:
+ found=keys(data)
+ for i in range(0,min(len(found),100),30): print('::notice::ASTRAL_DETAIL='+json.dumps({'path':name,'fields':found[i:i+30]},separators=(',',':'))[:1800])
+if isinstance(material,dict):
+ catalyst=[x for x in material.get('materials',[]) if isinstance(x,dict) and x.get('slug')=='astral-catalyst']
+ print('::notice::CATALYST_MATERIAL='+json.dumps(catalyst,ensure_ascii=False)[:1800])
+ print('::notice::MATERIALS_ROOT_KEYS='+json.dumps(list(material.keys())))
+if isinstance(config,dict):
+ print('::notice::CATALYST_CONFIG='+json.dumps(config.get('itemization',{}).get('drop_bonus_enhancement',{}),ensure_ascii=False)[:1800])
 try:
-    r=s.get('https://d.apkpure.net/b/APK/com.mikhaelstudio.idlearc?version=latest',timeout=100,allow_redirects=True)
-    parts=[]
-    def read(raw):
-        with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            for n in z.namelist():
-                if n.endswith('.apk'): read(z.read(n))
-                elif n.endswith('/libapp.so'): parts.append(z.read(n))
-    if r.status_code==200: read(r.content)
-    strings=set()
-    for blob in parts:
-        for raw in re.findall(rb'[ -~]{4,160}',blob):
-            t=raw.decode('ascii')
-            if any(x in t.lower() for x in ('astral','catalys')) and len(t)<=130: strings.add(t)
-    matches=sorted(strings,key=str.lower)
-    for i in range(0,min(50,len(matches)),25):
-        print('::notice::ASTRAL_STRINGS='+json.dumps(matches[i:i+25],ensure_ascii=True)[:1800])
-except Exception as e:
-    print('::notice::ASTRAL_APP_ERROR='+type(e).__name__)
+ r=s.get('https://d.apkpure.net/b/APK/com.mikhaelstudio.idlearc?version=latest',timeout=100,allow_redirects=True);parts=[]
+ def read(raw):
+  with zipfile.ZipFile(io.BytesIO(raw)) as z:
+   for n in z.namelist():
+    if n.endswith('.apk'):read(z.read(n))
+    elif n.endswith('/libapp.so'):parts.append(z.read(n))
+ if r.status_code==200:read(r.content)
+ strings=set()
+ for blob in parts:
+  for raw in re.findall(rb'[ -~]{4,250}',blob):
+   t=raw.decode('ascii');l=t.lower()
+   if any(w in l for w in ('catalys','astral','pity')) and len(t)<=200:strings.add(t)
+ matches=sorted(strings,key=lambda x:(not bool(re.search(r'(?i)(pity|drop|kill|rate|chance|timer|astral.catalyst|catalyst)',x)),x.lower()))
+ for i in range(0,min(len(matches),60),20): print('::notice::ASTRAL_STRINGS='+json.dumps(matches[i:i+20])[:1800])
+except Exception as e:print('::notice::ASTRAL_APP_ERROR='+type(e).__name__)
