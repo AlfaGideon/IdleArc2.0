@@ -77,6 +77,15 @@ jobs:
           fi
           python3 tools/inspect_apk.py "releases/${{ steps.ver.outputs.apk_name }}" --output /tmp/ota_inventory.json
 
+      - name: Verify update uses the existing signing certificate
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          APKSIGNER=$(find "$SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          old_cert=$("$APKSIGNER" verify --print-certs releases/IdleArcHelper-v4.1.0.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          new_cert=$("$APKSIGNER" verify --print-certs "releases/${{ steps.ver.outputs.apk_name }}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          test -n "$old_cert" && test "$old_cert" = "$new_cert" || { echo '::error::APK signing certificate does not match v4.1.0'; exit 1; }
+
       - name: Publish GitHub Release & Git Tag (OTA endpoint)
         env:
           GH_TOKEN: ${{ github.token }}

@@ -65,6 +65,18 @@ public class ApiClientSuite {
         if (!cond) throw new RuntimeException("ASSERT FAILED: " + msg);
     }
 
+    private static String inventoryPage(int page, int total, String nextKey) {
+        int last = (total + 9) / 10;
+        StringBuilder b = new StringBuilder("{\\"characterItemsPaginated\\":{\\"total\\":" + total
+                + ",\\"per_page\\":10,\\"last_page\\":" + last + ",\\"current_page\\":" + page
+                + ",\\"next_page_url\\":\\"https://idlearc.com/api/inventory?" + nextKey + "=2\\",\\"data\\":[");
+        for (int i = (page - 1) * 10 + 1; i <= Math.min(page * 10, total); i++) {
+            if (i > (page - 1) * 10 + 1) b.append(",");
+            b.append("{\\"id\\":" + i + "}");
+        }
+        return b.append("]}}").toString();
+    }
+
     public static void main(String[] args) {
         String syntheticDashboard = "{"
             + "\\"characterClassName\\":\\"Druid\\","
@@ -264,6 +276,58 @@ public class ApiClientSuite {
         }
         check(keptFrenzy && keptLucky, "Frenzy and Lucky drop bonuses kept for preset");
 
+        // /api/inventory returns page 1, /api/items-page/N returns a bare paginator.
+        try {
+            for (final int total : new int[]{61, 62, 90}) {
+                InventoryPageLoader.Result loaded = InventoryPageLoader.load(new InventoryPageLoader.Fetcher() {
+                    public String get(String path) {
+                        int page = path.startsWith("/api/items-page/") ? Integer.parseInt(path.substring(path.lastIndexOf('/') + 1)) : 1;
+                        String wrapped = inventoryPage(page, total, "page");
+                        return page == 1 ? wrapped : wrapped.substring("{\\"characterItemsPaginated\\":".length(), wrapped.length() - 1);
+                    }
+                });
+                check(loaded.items.size() == total && loaded.total == total, "all official inventory pages " + total);
+                java.util.List<java.util.Map<String,Object>> restored = new java.util.ArrayList<>();
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                for (String json : loaded.pages) InventoryPageLoader.append(SimpleJson.parseObject(json), restored, seen);
+                check(restored.size() == total, "cached pages restore all items " + total);
+            }
+            InventoryPageLoader.Result ignoredPage = InventoryPageLoader.load(new InventoryPageLoader.Fetcher() {
+                public String get(String path) { return inventoryPage(1, 62, "page"); }
+            });
+            check(ignoredPage.items.size() == 10 && ignoredPage.total == 62, "ignored page does not invent items");
+            InventoryPageLoader.Result partial = InventoryPageLoader.load(new InventoryPageLoader.Fetcher() {
+                public String get(String path) throws Exception {
+                    if (path.endsWith("/3")) throw new Exception("offline");
+                    if (path.endsWith("/2")) {
+                        String wrapped = inventoryPage(2, 62, "page");
+                        return wrapped.substring("{\\"characterItemsPaginated\\":".length(), wrapped.length() - 1);
+                    }
+                    return inventoryPage(1, 62, "page");
+                }
+            });
+            check(partial.items.size() == 20 && partial.total == 62, "retain partial inventory after failure");
+        } catch (Exception e) { throw new RuntimeException(e); }
+        Map<String, Object> floorOnly = SimpleJson.parseObject("{\\"monsterLevelProgress\\":{\\"kills\\":1,\\"required\\":50}}");
+        RadarTimeParser.RadarState unknownBoss = RadarTimeParser.parseRadar(floorOnly, nowMs);
+        check(!unknownBoss.bossStatusKnown && !unknownBoss.bossFightReady && unknownBoss.bossFightReadyAtMs == 0,
+                "floor progress is not the three hour boss cooldown");
+        Map<String, Object> bossLast = SimpleJson.parseObject("{\\"last_boss_fight_at\\":" + ((nowMs - 3600000L) / 1000L) + "}");
+        RadarTimeParser.RadarState lastBoss = RadarTimeParser.parseRadar(bossLast, nowMs);
+        check(lastBoss.bossFightReadyAtMs > nowMs + 7198000L && lastBoss.bossFightReadyAtMs <= nowMs + 7200000L,
+                "three hours calculated from last fight, not sync time");
+        Map<String, Object> expiredBoss = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs - 60000L) / 1000L) + "}");
+        check(RadarTimeParser.parseRadar(expiredBoss, nowMs).bossFightReady, "expired timestamp overrides stale cooldown flag");
+
+        Map<String, Object> realBossStatus = SimpleJson.parseObject("{\\"can_fight\\":false,\\"seconds_until_available\\":7200,\\"cooldown_hours\\":3}");
+        RadarTimeParser.RadarState realBoss = RadarTimeParser.parseRadar(floorOnly, nowMs, realBossStatus, nowMs - 60000L);
+        check(realBoss.bossFightReadyAtMs == nowMs + 7140000L, "boss status countdown anchored to fetch time");
+        check(RadarTimeParser.parseRadar(floorOnly, nowMs + 7200001L, realBossStatus, nowMs).bossFightReady,
+                "boss status countdown expires without resync");
+        Map<String, Object> lockedBoss = SimpleJson.parseObject("{\\"can_fight\\":false,\\"seconds_until_available\\":0}");
+        check(!RadarTimeParser.parseRadar(floorOnly, nowMs, lockedBoss, nowMs).bossFightReady,
+                "no false ready alert when server says unavailable without timer");
+
         // Проверка отката Боя с Боссом в RadarTimeParser
         Map<String, Object> bossDash = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs / 1000L) + 1800L) + "}");
         RadarTimeParser.RadarState bossRs = RadarTimeParser.parseRadar(bossDash, nowMs);
@@ -326,6 +390,7 @@ public class ApiClientSuite {
                 str(SRC_DIR / "AffixPositionOptimizer.java"),
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(SRC_DIR / "IdleArcApiClient.java"),
+                str(SRC_DIR / "InventoryPageLoader.java"),
                 str(SRC_DIR / "RuGameDictionary.java"),
                 str(SRC_DIR / "HeroClassProfile.java"),
                 str(SRC_DIR / "BagAndPetAdvisor.java"),

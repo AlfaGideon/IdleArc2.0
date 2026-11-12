@@ -28,6 +28,33 @@ public final class SystemAlarmAndNotifier {
     private SystemAlarmAndNotifier() {
     }
 
+    /** Локальный таймер запускается пользователем после боя; он не выдаётся за данные API. */
+    public static void startManualBossTimer(Context ctx, long now) {
+        SharedPreferences sp = prefs(ctx);
+        if (sp != null) sp.edit().putLong("manual_boss_deadline", now + 3 * 60 * 60 * 1000L).apply();
+    }
+
+    public static void clearManualBossTimer(Context ctx) {
+        SharedPreferences sp = prefs(ctx);
+        if (sp != null) sp.edit().putLong("manual_boss_deadline", 0L).apply();
+    }
+
+    public static void applyManualBossTimer(Context ctx, RadarTimeParser.RadarState radar, long now) {
+        SharedPreferences sp = prefs(ctx);
+        long deadline = sp == null ? 0 : sp.getLong("manual_boss_deadline", 0L);
+        // An explicit server deadline takes precedence over the local estimate.
+        if (deadline <= 0 || radar.bossFightReadyAtMs > now) return;
+        long started = deadline - 3 * 60 * 60 * 1000L;
+        if (IdleArcApiClient.getCachedBossFightStatus() != null
+                && IdleArcApiClient.getCachedBossFightStatusTimeMs() >= started) return;
+        if (deadline <= now && radar.bossStatusKnown) return;
+        radar.activeAlerts.remove("⚔️ Доступен Бой с Боссом!");
+        radar.bossStatusKnown = true;
+        radar.bossFightReady = deadline <= now;
+        radar.bossFightReadyAtMs = radar.bossFightReady ? 0 : deadline;
+        radar.bossStatusNote = radar.bossFightReady ? "Ручной таймер завершён" : "Ручной таймер: 3 часа после боя";
+    }
+
     public static boolean isAutoAlarmEnabled(Context ctx, String eventKey) {
         SharedPreferences sp = prefs(ctx);
         return sp != null && sp.getBoolean("auto_alarm_" + eventKey, false);
@@ -101,6 +128,7 @@ public final class SystemAlarmAndNotifier {
         if (ctx == null || dash == null) return;
         long now = System.currentTimeMillis();
         RadarTimeParser.RadarState radar = RadarTimeParser.parseRadar(dash, now);
+        applyManualBossTimer(ctx, radar, now);
         boolean quiet = isQuietHoursEnabled(ctx);
 
         // 1. Авто-будильники по включённым тумблерам

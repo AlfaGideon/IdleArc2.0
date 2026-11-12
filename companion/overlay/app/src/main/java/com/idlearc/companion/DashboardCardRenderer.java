@@ -37,6 +37,8 @@ public final class DashboardCardRenderer {
     }
 
     private static int activeItemBagFilter = 0; // 0 = Все, 1 = Уничтожить, 2 = Оставить
+    private static int itemBagPage = 0;
+    private static final int ITEM_BAG_PAGE_SIZE = 10;
     private static int activeGemBagFilter = 0;  // 0 = Все, 1 = Вставить/Слить, 2 = В пыль
 
     private DashboardCardRenderer() {
@@ -57,6 +59,8 @@ public final class DashboardCardRenderer {
         }
         final long now = System.currentTimeMillis();
         final RadarTimeParser.RadarState radar = RadarTimeParser.parseRadar(dash, now);
+        final boolean bossHasServerDeadline = radar.bossFightReadyAtMs > now;
+        SystemAlarmAndNotifier.applyManualBossTimer(ctx, radar, now);
         final boolean quietHours = SystemAlarmAndNotifier.isQuietHoursEnabled(ctx);
 
         // 0. Баннер «До / После» (если были изменения статов с прошлой синхронизации)
@@ -103,7 +107,7 @@ public final class DashboardCardRenderer {
                     radar.bossFightReady ? "#69F0AE" : "#90CAF9", 11.5f));
             bossRow.addView(bCol);
 
-            bossRow.addView(badge(ctx, radar.bossFightReady ? "🔥 ГОТОВ" : "В процессе",
+            bossRow.addView(badge(ctx, radar.bossFightReady ? "🔥 ГОТОВ" : (radar.bossStatusKnown ? "НЕДОСТУПЕН" : "НЕТ ДАННЫХ"),
                     radar.bossFightReady ? "#1B4332" : "#22303C",
                     radar.bossFightReady ? "#69F0AE" : "#90CAF9"));
             addSpace(ctx, bossRow, 5);
@@ -120,6 +124,28 @@ public final class DashboardCardRenderer {
             });
             bossRow.addView(autoBossBtn);
             alarmCard.addView(bossRow);
+        }
+
+        if (radar.bossFightReadyAtMs > now && radar.bossStatusNote.startsWith("Ручной")) {
+            alarmCard.addView(bodyText(ctx, radar.bossStatusNote, "#90CAF9", 11f));
+        }
+        if (!bossHasServerDeadline) {
+        Button startBossTimer = pillButton(ctx, "⏱ После боя: запустить 3 часа", "#1C2833", "#81D4FA");
+        startBossTimer.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                long started = System.currentTimeMillis();
+                SystemAlarmAndNotifier.startManualBossTimer(ctx, started);
+                if (SystemAlarmAndNotifier.isAutoAlarmEnabled(ctx, "boss")) {
+                    RadarTimeParser.AlarmTarget target = RadarTimeParser.buildAlarmTarget(
+                            "boss", "⚔️ IdleArc: Откатился Бой с Боссом!",
+                            started + 3 * 60 * 60 * 1000L, started,
+                            SystemAlarmAndNotifier.isQuietHoursEnabled(ctx));
+                    SystemAlarmAndNotifier.scheduleSystemClockAlarm(ctx, target, false);
+                }
+                if (refreshCb != null) refreshCb.onRequestRefresh();
+            }
+        });
+        alarmCard.addView(startBossTimer);
         }
 
         // Строка Подземелья
@@ -740,6 +766,7 @@ public final class DashboardCardRenderer {
                 @Override
                 public void onClick(View v) {
                     activeItemBagFilter = fIdx;
+                    itemBagPage = 0;
                     renderBagAndResourcesTab(ctx, root, dash, p);
                 }
             });
@@ -747,19 +774,33 @@ public final class DashboardCardRenderer {
         }
         invCard.addView(invFilterRow);
 
+        if (IdleArcApiClient.getCachedInventoryTotalCount() > IdleArcApiClient.getCachedInventoryItems().size()) {
+            invCard.addView(bodyText(ctx,
+                    "⚠️ Сервер вернул не все предметы: загружено " + IdleArcApiClient.getCachedInventoryItems().size()
+                    + " из " + IdleArcApiClient.getCachedInventoryTotalCount()
+                    + ". Остальные страницы пока недоступны; рекомендации основаны только на загруженных вещах.",
+                    "#FFD54F", 12f));
+        }
+
         if (invSum.entries.isEmpty()) {
             invCard.addView(bodyText(ctx,
                     "Нажми «🔄 Обновить API», чтобы загрузить твой инвентарь (/api/inventory).",
                     "#FFD54F", 12f));
         } else {
-            int renderedItems = 0;
+            final List<BagAndPetAdvisor.BagItemEntry> filteredItems = new ArrayList<>();
             for (BagAndPetAdvisor.BagItemEntry ie : invSum.entries) {
                 if (activeItemBagFilter == 1 && !("frenzy".equals(ie.dropBonusSlug) || "lucky".equals(ie.dropBonusSlug)
                         || "scavengers".equals(ie.dropBonusSlug) || ie.action == BagAndPetAdvisor.ItemBagAction.KEEP_FARM_PRESET)) continue;
                 if (activeItemBagFilter == 2 && ie.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
                 if (activeItemBagFilter == 3 && ie.action != BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
-                renderedItems++;
-
+                filteredItems.add(ie);
+            }
+            final int pageCount = Math.max(1, (filteredItems.size() + ITEM_BAG_PAGE_SIZE - 1) / ITEM_BAG_PAGE_SIZE);
+            itemBagPage = Math.max(0, Math.min(itemBagPage, pageCount - 1));
+            int startIndex = itemBagPage * ITEM_BAG_PAGE_SIZE;
+            int endIndex = Math.min(startIndex + ITEM_BAG_PAGE_SIZE, filteredItems.size());
+            for (int i = startIndex; i < endIndex; i++) {
+                BagAndPetAdvisor.BagItemEntry ie = filteredItems.get(i);
                 LinearLayout iBox = makeCard(ctx, "#0C151D", ie.action.fgHex);
                 iBox.setPadding(dp(ctx, 9), dp(ctx, 7), dp(ctx, 9), dp(ctx, 7));
 
@@ -790,8 +831,27 @@ public final class DashboardCardRenderer {
                 iBox.addView(bodyText(ctx, ie.reasonRu, "#ECEFF1", 11.5f));
                 invCard.addView(iBox);
             }
-            if (renderedItems == 0) {
+            if (filteredItems.isEmpty()) {
                 invCard.addView(bodyText(ctx, "В выбранном фильтре предметов нет.", "#90A4AE", 12f));
+            } else {
+                LinearLayout pageRow = row(ctx);
+                Button prev = pillButton(ctx, "◀ Назад", "#16222E", "#FFFFFF");
+                prev.setEnabled(itemBagPage > 0);
+                prev.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) { itemBagPage--; renderBagAndResourcesTab(ctx, root, dash, p); }
+                });
+                pageRow.addView(prev);
+                TextView pageLabel = bodyText(ctx, "  " + (itemBagPage + 1) + " / " + pageCount
+                        + " · " + (startIndex + 1) + "–" + endIndex + " из " + filteredItems.size() + "  ", "#ECEFF1", 12f);
+                pageLabel.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                pageRow.addView(pageLabel);
+                Button next = pillButton(ctx, "Далее ▶", "#16222E", "#FFFFFF");
+                next.setEnabled(itemBagPage + 1 < pageCount);
+                next.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) { itemBagPage++; renderBagAndResourcesTab(ctx, root, dash, p); }
+                });
+                pageRow.addView(next);
+                invCard.addView(pageRow);
             }
         }
         root.addView(invCard);

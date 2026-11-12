@@ -37,6 +37,8 @@ public class IdleArcApiClient {
     private static volatile int cachedInventoryTotalCount = 0;
     private static volatile Map<String, Object> cachedGemsData = null;
     private static volatile Map<String, Object> cachedDungeonData = null;
+    private static volatile Map<String, Object> cachedBossFightStatus = null;
+    private static volatile long cachedBossFightStatusTimeMs = 0L;
     private static volatile Map<String, Object> cachedGuildData = null;
     private static volatile long lastSyncTimeMs = 0L;
 
@@ -79,9 +81,13 @@ public class IdleArcApiClient {
         cachedInventoryTotalCount = 0;
         cachedGemsData = null;
         cachedDungeonData = null;
+        cachedBossFightStatus = null;
+        cachedBossFightStatusTimeMs = 0L;
         cachedGuildData = null;
         lastSyncTimeMs = 0L;
         if (ctx == null) return;
+        SharedPreferences alarms = ctx.getSharedPreferences("druid_helper_alarms_v31", Context.MODE_PRIVATE);
+        if (alarms != null) alarms.edit().putLong("manual_boss_deadline", 0L).apply();
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
         if (sp != null) {
             sp.edit()
@@ -95,6 +101,8 @@ public class IdleArcApiClient {
             cp.edit()
               .putString("dashboard_json", "")
               .putString("gems_json", "")
+              .putString("boss_status_json", "")
+              .putLong("boss_status_ts", 0L)
               .putInt("inv_page_cnt", 0)
               .putLong("sync_ts", 0L)
               .apply();
@@ -119,6 +127,14 @@ public class IdleArcApiClient {
 
     public static Map<String, Object> getCachedGemsData() {
         return cachedGemsData;
+    }
+
+    public static Map<String, Object> getCachedBossFightStatus() {
+        return cachedBossFightStatus;
+    }
+
+    public static long getCachedBossFightStatusTimeMs() {
+        return cachedBossFightStatusTimeMs;
     }
 
     public static Map<String, Object> getCachedDungeonData() {
@@ -158,6 +174,11 @@ public class IdleArcApiClient {
         String rawGems = cp.getString("gems_json", "");
         if (rawGems != null && !rawGems.isEmpty()) {
             cachedGemsData = SimpleJson.parseObject(rawGems);
+        }
+        String rawBoss = cp.getString("boss_status_json", "");
+        if (rawBoss != null && !rawBoss.isEmpty()) {
+            cachedBossFightStatus = SimpleJson.parseObject(rawBoss);
+            cachedBossFightStatusTimeMs = cp.getLong("boss_status_ts", 0L);
         }
         String rawDung = cp.getString("dungeon_json", "");
         if (rawDung != null && !rawDung.isEmpty()) {
@@ -243,6 +264,20 @@ public class IdleArcApiClient {
                     } catch (Exception ignored) {
                     }
 
+                    String bossJson = "";
+                    try {
+                        bossJson = fetchAuthenticatedGetJson(token, "/api/boss-fight/status");
+                        Map<String, Object> status = SimpleJson.parseObject(bossJson);
+                        if (status != null && status.containsKey("can_fight")) {
+                            cachedBossFightStatusTimeMs = System.currentTimeMillis();
+                            cachedBossFightStatus = status;
+                        } else {
+                            bossJson = "";
+                        }
+                    } catch (Exception ignored) {
+                        bossJson = "";
+                    }
+
                     String dungeonJson = "";
                     try {
                         dungeonJson = fetchAuthenticatedGetJson(token, "/api/dungeon");
@@ -264,33 +299,18 @@ public class IdleArcApiClient {
                     }
 
                     List<String> rawInvPages = new ArrayList<>();
-                    List<Map<String, Object>> allInvItems = new ArrayList<>();
-                    java.util.Set<String> seenInvIds = new java.util.HashSet<>();
-                    int realInvTotal = 0;
                     try {
-                        String p1Json = fetchAuthenticatedGetJson(token, "/api/inventory");
-                        Map<String, Object> p1Map = SimpleJson.parseObject(p1Json);
-                        if (p1Map != null && !p1Map.isEmpty()) {
-                            rawInvPages.add(p1Json);
-                            int added1 = extractInventoryPageItems(p1Map, allInvItems, seenInvIds);
-                            Map<String, Object> pag = SimpleJson.asMap(p1Map.get("characterItemsPaginated"));
-                            realInvTotal = pag != null ? SimpleJson.intVal(pag, "total", added1) : added1;
-                            int lastPage = pag != null ? Math.min(12, SimpleJson.intVal(pag, "last_page", 1)) : 1;
-                            for (int pg = 2; pg <= lastPage; pg++) {
-                                String pgJson = fetchAuthenticatedGetJson(token, "/api/inventory?page=" + pg);
-                                Map<String, Object> pgMap = SimpleJson.parseObject(pgJson);
-                                if (pgMap == null) break;
-                                int newlyAdded = extractInventoryPageItems(pgMap, allInvItems, seenInvIds);
-                                if (newlyAdded == 0) {
-                                    // Сервер вернул дубли страницы 1 — мгновенно прекращаем цикл, чтобы не задваивать вещи!
-                                    break;
-                                }
-                                rawInvPages.add(pgJson);
+                        final String inventoryToken = token;
+                        InventoryPageLoader.Result inventory = InventoryPageLoader.load(new InventoryPageLoader.Fetcher() {
+                            @Override public String get(String path) throws Exception {
+                                return fetchAuthenticatedGetJson(inventoryToken, path);
                             }
-                            cachedInventoryItems = allInvItems;
-                            cachedInventoryTotalCount = Math.max(realInvTotal, allInvItems.size());
-                        }
+                        });
+                        rawInvPages.addAll(inventory.pages);
+                        cachedInventoryItems = inventory.items;
+                        cachedInventoryTotalCount = inventory.total;
                     } catch (Exception ignored) {
+                        // Keep the last successful snapshot if the first page cannot be loaded.
                     }
 
                     if (ctx != null) {
@@ -301,6 +321,8 @@ public class IdleArcApiClient {
                                     .putString("dashboard_json", dashJson)
                                     .putLong("sync_ts", lastSyncTimeMs);
                             if (!gemsJson.isEmpty()) ed.putString("gems_json", gemsJson);
+                            if (!bossJson.isEmpty()) ed.putString("boss_status_json", bossJson)
+                                    .putLong("boss_status_ts", cachedBossFightStatusTimeMs);
                             if (!dungeonJson.isEmpty()) ed.putString("dungeon_json", dungeonJson);
                             if (!guildJson.isEmpty()) ed.putString("guild_json", guildJson);
                             if (!rawInvPages.isEmpty()) {
@@ -405,23 +427,7 @@ public class IdleArcApiClient {
     private static int extractInventoryPageItems(Map<String, Object> pageRoot,
                                                  List<Map<String, Object>> out,
                                                  java.util.Set<String> seenIds) {
-        if (pageRoot == null || out == null) return 0;
-        Map<String, Object> pag = SimpleJson.asMap(pageRoot.get("characterItemsPaginated"));
-        List<Object> data = pag != null ? SimpleJson.asList(pag.get("data")) : SimpleJson.asList(pageRoot.get("items"));
-        if (data == null) return 0;
-        int added = 0;
-        for (Object obj : data) {
-            Map<String, Object> item = SimpleJson.asMap(obj);
-            if (item == null) continue;
-            String id = SimpleJson.str(item, "id", "");
-            if (!id.isEmpty()) {
-                if (seenIds != null && seenIds.contains(id)) continue;
-                if (seenIds != null) seenIds.add(id);
-            }
-            out.add(item);
-            added++;
-        }
-        return added;
+        return InventoryPageLoader.append(pageRoot, out, seenIds);
     }
 
     public static String fetchPublicGameConfigJson() throws Exception {
