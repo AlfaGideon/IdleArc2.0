@@ -36,10 +36,32 @@ public final class SimpleJson {
         return (o instanceof List) ? (List<Object>) o : null;
     }
 
+    @SuppressWarnings("unchecked")
     public static String str(Map<String, Object> m, String key, String defVal) {
         if (m == null) return defVal;
         Object v = m.get(key);
-        return v != null ? String.valueOf(v) : defVal;
+        if (v == null) return defVal;
+        if (v instanceof Map) {
+            Map<String, Object> sub = (Map<String, Object>) v;
+            String[] nameKeys = {"display_name", "readable_bonus_name", "title", "name", "label", "slug"};
+            for (String nk : nameKeys) {
+                Object sv = sub.get(nk);
+                if (sv instanceof String && !((String) sv).isEmpty()) {
+                    return (String) sv;
+                }
+            }
+            return defVal;
+        }
+        if (v instanceof List) {
+            return defVal;
+        }
+        if (v instanceof Double) {
+            double dv = (Double) v;
+            if (Math.abs(dv - Math.rint(dv)) < 1e-6 && Math.abs(dv) < 1e15) {
+                return String.valueOf(Math.round(dv));
+            }
+        }
+        return String.valueOf(v);
     }
 
     public static double num(Map<String, Object> m, String key, double defVal) {

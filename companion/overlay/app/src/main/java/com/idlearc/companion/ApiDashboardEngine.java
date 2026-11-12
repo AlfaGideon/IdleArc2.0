@@ -590,8 +590,10 @@ public class ApiDashboardEngine {
                 }
 
                 sb.append(String.format(Locale.US,
-                        "  • %s [%s · сост. ур.%d]: база %s | спец-бонус: %s (+%.1f)\n",
-                        pName, rar, cLvl, fmtBig(avgD), ruPetSpecial(specType), specVal));
+                        "  • %s [%s · сост. ур.%d]: база %s | спец-бонус: %s (%s)\n",
+                        pName, RuGameDictionary.itemOrPetRarityRu(rar), cLvl, fmtBig(avgD),
+                        RuGameDictionary.statName(specType),
+                        RuGameDictionary.formatStatValue(specType, specVal, null)));
             }
             if (!weakestPetName.isEmpty()) {
                 sb.append(String.format(Locale.US,
@@ -607,7 +609,8 @@ public class ApiDashboardEngine {
             for (Object to : tals) {
                 Map<String, Object> tm = SimpleJson.asMap(to);
                 if (tm == null) continue;
-                String tName = SimpleJson.str(tm, "name", "Талисман");
+                String tSlug = SimpleJson.str(tm, "slug", "");
+                String tName = RuGameDictionary.talismanNameRu(tSlug, SimpleJson.str(tm, "name", "Талисман"));
                 int tSlot = SimpleJson.intVal(tm, "slot", 1);
                 int tLvl = SimpleJson.intVal(tm, "level", 1);
                 sb.append(String.format(Locale.US, "  • Слот #%d: %s (ур. %d)\n", tSlot, tName, tLvl));
@@ -618,8 +621,10 @@ public class ApiDashboardEngine {
                     for (Map.Entry<String, Object> e : totals.entrySet()) {
                         Map<String, Object> entryMap = SimpleJson.asMap(e.getValue());
                         double tot = entryMap != null ? SimpleJson.num(entryMap, "total", 0.0) : SimpleJson.num(totals, e.getKey(), 0.0);
+                        String suffix = entryMap != null ? SimpleJson.str(entryMap, "suffix", null) : null;
                         if (Math.abs(tot) > 0.01) {
-                            inscParts.add(ruInscriptionStat(e.getKey()) + " +" + fmt1(tot) + "%");
+                            inscParts.add(RuGameDictionary.statName(e.getKey()) + " "
+                                    + RuGameDictionary.formatStatValue(e.getKey(), tot, suffix));
                         }
                     }
                     if (!inscParts.isEmpty()) {
@@ -828,7 +833,7 @@ public class ApiDashboardEngine {
             for (Object po : rawPos) {
                 Map<String, Object> pm = SimpleJson.asMap(po);
                 if (pm == null) continue;
-                int pIdx = SimpleJson.intVal(pm, "index", parsedPos.size() + 1);
+                int pIdx = parsedPos.size() + 1;
                 int boost = SimpleJson.intVal(pm, "boost_count", 0);
                 Map<String, Object> aff = SimpleJson.asMap(pm.get("affix"));
                 if (aff == null) {
@@ -841,7 +846,8 @@ public class ApiDashboardEngine {
                     double val = SimpleJson.num(aff, "value", 0.0);
                     double rMin = SimpleJson.num(aff, "range_min", val);
                     double rMax = SimpleJson.num(aff, "range_max", val);
-                    double rQual = SimpleJson.num(aff, "roll_quality", rMax > rMin ? ((val - rMin) / (rMax - rMin) * 100.0) : 100.0);
+                    double rQual = RuGameDictionary.normalizeRollQualityPct(
+                            SimpleJson.num(aff, "roll_quality", -1.0), val, rMin, rMax);
                     boolean locked = SimpleJson.bool(aff, "is_locked", false);
                     boolean infernal = SimpleJson.bool(aff, "is_infernal", false);
 
@@ -1356,76 +1362,31 @@ public class ApiDashboardEngine {
     }
 
     private static String ruStance(String s) {
-        if (s == null) return "—";
-        String low = s.toLowerCase(Locale.ROOT);
-        if (low.contains("beast")) return "Повелитель зверей (Beastmaster)";
-        if (low.contains("jugg")) return "Джаггернаут (Juggernaut)";
-        if (low.contains("bers")) return "Берсерк (Berserker)";
-        if (low.contains("loot") || low.contains("scav")) return "Искатель добычи";
-        return s;
+        return RuGameDictionary.stanceRu(s);
     }
 
     private static String ruGemStat(String st) {
-        switch (st) {
-            case "pet_damage": return "Урон пета";
-            case "critical_strike_chance": return "Шанс крита";
-            case "critical_damage": return "Крит. урон";
-            case "double_hit_chance": return "Дв. удар";
-            case "double_damage_chance": return "Дв. урон";
-            case "dodge_chance": return "Уклонение";
-            case "damage_reduction": return "СУ";
-            case "intelligence": return "Инт";
-            case "dexterity": return "Ловк";
-            case "strength": return "Сила";
-            case "max_health": return "Здоровье";
-            case "extra_kill_chance": return "Доп. убийство";
-            case "exp_gain": return "Опыт";
-            case "gold_gain": return "Золото";
-            default: return st;
-        }
+        return RuGameDictionary.statName(st);
     }
 
     private static boolean isGemStatPct(String st) {
-        return !("intelligence".equals(st) || "dexterity".equals(st) || "strength".equals(st));
+        return RuGameDictionary.isPercentStat(st, null);
     }
 
     private static String ruImplicitName(String it) {
-        if (it.contains("defense")) return "Защита";
-        if (it.contains("damage")) return "Атака";
-        if (it.contains("health")) return "Здоровье";
-        if (it.contains("crit")) return "Крит";
-        if (it.contains("block")) return "Блок";
-        return it;
+        return RuGameDictionary.statName(it);
     }
 
     private static String ruDropBonus(String dt) {
-        if (dt.contains("item")) return "Дроп вещей";
-        if (dt.contains("rune")) return "Дроп рун";
-        if (dt.contains("ruby")) return "Дроп рубинов";
-        if (dt.contains("material")) return "Материалы";
-        if (dt.contains("pet")) return "Урон пета";
-        return dt;
+        return RuGameDictionary.statName(dt);
     }
 
     private static String ruPetSpecial(String sp) {
-        if ("all_skills".equals(sp)) return "Все навыки";
-        if ("pet_damage".equals(sp)) return "Урон питомца %";
-        if ("item_quantity".equals(sp)) return "Дроп предметов %";
-        if ("rune_drops".equals(sp)) return "Дроп рун %";
-        if ("ruby_drops".equals(sp)) return "Дроп рубинов %";
-        if ("material_quantity".equals(sp)) return "Материалы %";
-        return sp;
+        return RuGameDictionary.statName(sp);
     }
 
     private static String ruInscriptionStat(String k) {
-        if (k.contains("double_hit")) return "Дв. удар";
-        if (k.contains("double_damage")) return "Дв. урон";
-        if (k.contains("pet_damage")) return "Урон пета";
-        if (k.contains("crit_damage") || k.contains("critical_damage")) return "Крит. урон";
-        if (k.contains("crit")) return "Шанс крита";
-        if (k.contains("damage_reduction")) return "СУ";
-        if (k.contains("dodge")) return "Уклонение";
-        return k;
+        return RuGameDictionary.statName(k);
     }
 
     private static String toRoman(int n) {

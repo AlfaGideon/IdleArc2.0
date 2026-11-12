@@ -186,6 +186,49 @@ public class ApiClientSuite {
         String tab5Skills = ApiDashboardEngine.buildSkillsAuditReport(dash, p, null);
         check(tab5Skills.contains("НАЙДЕНЫ СВОБОДНЫЕ ОЧКИ НАВЫКОВ") && tab5Skills.contains("Сердце-близнец"), "Tab 5 Skills overcap reclaim");
 
+        // === Тесты v3.1.0: RuGameDictionary (0% сырых GSON-ключей), RadarTimeParser, SnapshotHistoryTracker и 16 функций ===
+        check("Получение опыта".equals(RuGameDictionary.statName("exp_gain")), "exp_gain translated");
+        check("Сила атаки".equals(RuGameDictionary.statName("attack_power")), "attack_power translated");
+        check("Атака и урон питомцев".equals(RuGameDictionary.statName("attack_pet_damage")), "attack_pet_damage translated");
+        check("Урон питомцев".equals(RuGameDictionary.statName("companions")), "companions drop bonus translated");
+        check("Безупречный".equals(RuGameDictionary.gemRarityRu("flawless")), "gem rarity translated");
+        check("Талисман Духа".equals(RuGameDictionary.talismanNameRu("spirit", "Talisman of Spirit")), "talisman name translated");
+        check(Math.abs(RuGameDictionary.normalizeRollQualityPct(1.0, 47, 24, 47) - 100.0) < 0.01, "0..1 roll_quality normalized to 100%");
+
+        // SimpleJson.str никогда не должен возвращать сырой Map.toString() вида {id=1, name=...}
+        Map<String, Object> nestedTest = SimpleJson.parseObject("{\\"biome\\":{\\"id\\":5,\\"name\\":\\"Frozen Tundra\\"},\\"arr\\":[1,2]}");
+        check("Frozen Tundra".equals(SimpleJson.str(nestedTest, "biome", "")), "SimpleJson.str unwraps nested name cleanly");
+        check("".equals(SimpleJson.str(nestedTest, "arr", "")), "SimpleJson.str does not dump raw List");
+
+        // Радар аккаунта и расчёт будильника с Тихими часами (00:00–08:00 -> 08:00)
+        long nowMs = 1762900000000L;
+        Map<String, Object> radarDash = SimpleJson.parseObject("{"
+            + "\\"isDungeonOnCooldown\\":true,"
+            + "\\"dungeonCooldownExpirationTime\\":" + ((nowMs / 1000L) + 3600L) + ","
+            + "\\"guild_boss_can_fight\\":true,"
+            + "\\"treePoints\\":3,"
+            + "\\"monsterLevelPaused\\":true"
+            + "}");
+        RadarTimeParser.RadarState rs = RadarTimeParser.parseRadar(radarDash, nowMs);
+        check(!rs.dungeonReady && rs.dungeonReadyAtMs > nowMs, "Dungeon cooldown parsed");
+        check(rs.guildBossReady && rs.unspentTreePoints == 3 && rs.floorPaused, "Radar alerts parsed");
+        RadarTimeParser.AlarmTarget at = RadarTimeParser.buildAlarmTarget("dungeon", "Данж", rs.dungeonReadyAtMs, nowMs, false);
+        check(at != null && at.formattedTime.contains(":"), "System alarm target formatted");
+
+        // Примерочная статов (What-If), ROI ресурсов и Детектор До/После
+        java.util.List<ApiDashboardEngine.ServerItemAudit> eqList = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
+        check(!eqList.isEmpty() && eqList.get(0).positions.get(0).index == 1, "1-based position index");
+        String whatIf = ApiFeatureAnalyzers.simulateWhatIfChange(
+            dash, p, eqList.get(0), 2, AffixPositionOptimizer.AffixType.INTELLIGENCE, 0.90);
+        check(whatIf.contains("ПРИМЕРОЧНАЯ") && whatIf.contains("Интеллект"), "What-If simulator works");
+
+        ApiFeatureAnalyzers.ResourceRoiReport roi = ApiFeatureAnalyzers.analyzeResourcesAndRoi(dash, p);
+        check(roi != null, "Resource ROI report built");
+
+        Map<String, Object> newerDash = SimpleJson.parseObject(syntheticDashboard.replace("2500000000000.0", "2750000000000.0"));
+        SnapshotHistoryTracker.computeBeforeAfterDiff(dash, newerDash);
+        check(SnapshotHistoryTracker.getLastDiffSummary().contains("+10.00%"), "Before/After diff detects +10% pet hit");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -206,6 +249,10 @@ public class ApiClientSuite {
                 str(SRC_DIR / "AffixPositionOptimizer.java"),
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(SRC_DIR / "IdleArcApiClient.java"),
+                str(SRC_DIR / "RuGameDictionary.java"),
+                str(SRC_DIR / "SnapshotHistoryTracker.java"),
+                str(SRC_DIR / "RadarTimeParser.java"),
+                str(SRC_DIR / "ApiFeatureAnalyzers.java"),
                 str(SRC_DIR / "ApiDashboardEngine.java"),
                 str(tmp / "ApiClientSuite.java"),
             ]

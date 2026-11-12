@@ -163,9 +163,11 @@ public class IdleArcApiClient {
                         if (cb != null) cb.onError("Сервер вернул пустой ответ /api/dashboard.");
                         return;
                     }
+                    Map<String, Object> prevDash = cachedDashboard;
                     cachedDashboard = dash;
                     lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
+                    SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash);
                     if (ctx != null) {
                         profile.save(ctx);
                         SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
