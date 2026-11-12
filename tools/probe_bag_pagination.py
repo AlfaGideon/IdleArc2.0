@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import urllib.request
 
 BASE = "https://idlearc.com"
+
+def req_text(path_or_url, headers=None):
+    url = path_or_url if path_or_url.startswith("http") else (BASE + path_or_url)
+    h = {"User-Agent": "Mozilla/5.0"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return r.read().decode("utf-8", errors="ignore")
 
 def req_json(path_or_url, method="GET", token=None, body=None):
     url = path_or_url if path_or_url.startswith("http") else (BASE + path_or_url)
@@ -19,82 +29,79 @@ def req_json(path_or_url, method="GET", token=None, body=None):
         return json.loads(r.read().decode("utf-8"))
 
 def main():
-    # 1. Exact itemization.drop_bonuses from public /api/config/game
+    # 1. Print ALL drop_bonuses compactly (key -> {name, stat, cat, t6})
     cfg = req_json("/api/config/game")
-    itemiz = cfg.get("itemization", {})
-    drop_bonuses = itemiz.get("drop_bonuses", {})
-    print("::notice::DROP_BONUSES_FULL=" + json.dumps(drop_bonuses, ensure_ascii=False)[:1800])
+    dbs = cfg.get("itemization", {}).get("drop_bonuses", {})
+    compact_dbs = {
+        k: {"name": v.get("name"), "stat": v.get("stat"), "cat": v.get("category"), "t6": v.get("values", {}).get("6")}
+        for k, v in dbs.items()
+    }
+    print("::notice::ALL_DROP_BONUSES=" + json.dumps(compact_dbs, ensure_ascii=False))
 
-    # 2. Login & inspect /api/inventory pagination metadata
+    # 2. Inspect Vite manifest / build assets from HTML to find exact inventory pagination URL!
+    html = req_text("/login")
+    asset_urls = re.findall(r'(/build/assets/[^"\'>\s]+\.js)', html)
+    manifest_info = {}
+    try:
+        m_raw = req_text("/build/manifest.json")
+        m_json = json.loads(m_raw)
+        inv_assets = [v.get("file") for k, v in m_json.items() if "nventory" in k or "tem" in k or "app" in k]
+        manifest_info["inv_assets"] = inv_assets[:15]
+        for af in inv_assets[:8]:
+            js = req_text("/build/" + af)
+            apis = sorted(set(re.findall(r'/api/[a-zA-Z0-9_/\-\?\=\&\$]+', js)))
+            pags = sorted(set(re.findall(r'.{0,40}characterItemsPaginated.{0,60}', js)))
+            if apis or pags:
+                manifest_info[af] = {"apis": apis[:25], "pags": pags[:5]}
+    except Exception as ex:
+        manifest_info["manifest_err"] = str(ex)
+        for au in asset_urls[:5]:
+            js = req_text(au)
+            apis = sorted(set(re.findall(r'/api/[a-zA-Z0-9_/\-\?\=\&]+', js)))
+            if apis:
+                manifest_info[au] = apis[:30]
+
+    print("::notice::JS_INVENTORY_APIS=" + json.dumps(manifest_info, ensure_ascii=False)[:1800])
+
+    # 3. Also test likely Laravel/API endpoints for paginated character items!
     email = os.environ["IDLEARC_EMAIL"]
     password = os.environ["IDLEARC_PASSWORD"]
     tok = req_json("/api/login", method="POST", body={
         "email": email, "password": password, "device_name": "IdleArcSchemaProbe"
     })["token"]
 
-    inv1 = req_json("/api/inventory", token=tok)
-    pag = inv1.get("characterItemsPaginated", {})
-    pag_meta = {k: v for k, v in pag.items() if k != "data"}
-    p1_ids = [it.get("id") for it in pag.get("data", [])]
-    print("::notice::INV_PAG_META=" + json.dumps({"meta": pag_meta, "p1_ids": p1_ids, "root_keys": list(inv1.keys())}, ensure_ascii=False)[:1800])
+    candidates = [
+        "/api/character/items?page=2",
+        "/api/character-items?page=2",
+        "/api/items?page=2",
+        "/api/inventory/paginated?page=2",
+        "/api/inventory?itemPage=2",
+        "/api/inventory?inv_page=2",
+        "/api/inventory?p=2",
+    ]
+    # Also add any /api/... discovered from JS that mentions inventory or item!
+    for val in manifest_info.values():
+        if isinstance(val, dict):
+            for a in val.get("apis", []):
+                base_ep = a.split("$")[0].rstrip("?&=")
+                if "item" in base_ep.lower() or "inv" in base_ep.lower():
+                    candidates.append(base_ep + ("&page=2" if "?" in base_ep else "?page=2"))
 
-    # Test next_page_url and candidate pagination params
-    next_url = pag.get("next_page_url")
-    tests = {}
-    for label, u in [
-        ("next_page_url", next_url),
-        ("page_2", "/api/inventory?page=2"),
-        ("items_page_2", "/api/inventory?items_page=2"),
-        ("character_items_page_2", "/api/inventory?character_items_page=2"),
-        ("inv_items_ep", "/api/inventory/items?page=2"),
-        ("per_page_200", "/api/inventory?per_page=200"),
-    ]:
-        if not u:
-            continue
+    ep_results = {}
+    for c in dict.fromkeys(candidates):
         try:
-            res = req_json(u, token=tok)
-            rp = res.get("characterItemsPaginated", res)
-            rdata = rp.get("data", []) if isinstance(rp, dict) else []
-            tests[label] = {
+            r = req_json(c, token=tok)
+            rp = r.get("characterItemsPaginated", r) if isinstance(r, dict) else {}
+            data = rp.get("data", r.get("items", [])) if isinstance(rp, dict) else []
+            ep_results[c] = {
+                "keys": list(r.keys())[:8] if isinstance(r, dict) else "list",
                 "cur": rp.get("current_page") if isinstance(rp, dict) else None,
-                "cnt": len(rdata),
-                "ids": [x.get("id") for x in rdata[:5] if isinstance(x, dict)],
+                "cnt": len(data) if isinstance(data, list) else -1,
+                "first_id": data[0].get("id") if isinstance(data, list) and data and isinstance(data[0], dict) else None,
             }
-        except Exception as ex:
-            tests[label] = str(ex)
-    print("::notice::PAGINATION_TESTS=" + json.dumps(tests, ensure_ascii=False)[:1800])
-
-    # Collect all unique items if pagination works via whichever method succeeded
-    seen = {}
-    for it in pag.get("data", []):
-        seen[it["id"]] = it
-
-    # Try following next_page_url chain first
-    cur_next = next_url
-    hops = 0
-    while cur_next and hops < 15:
-        hops += 1
-        r = req_json(cur_next, token=tok)
-        rp = r.get("characterItemsPaginated", r)
-        for it in rp.get("data", []):
-            seen[it["id"]] = it
-        nxt = rp.get("next_page_url")
-        if not nxt or nxt == cur_next:
-            break
-        cur_next = nxt
-
-    # Summarize all unique items & all fields of 1 sample item + distribution of drop_bonus_type
-    sample_item = next(iter(seen.values())) if seen else {}
-    sample_slim = {k: v for k, v in sample_item.items() if k != "affix_positions"}
-    dbt_counts = {}
-    for it in seen.values():
-        k = str(it.get("drop_bonus_type"))
-        dbt_counts[k] = dbt_counts.get(k, 0) + 1
-    print("::notice::UNIQUE_ITEMS_SUMMARY=" + json.dumps({
-        "unique_count": len(seen),
-        "drop_bonus_counts": dbt_counts,
-        "sample_item_keys_vals": sample_slim,
-    }, ensure_ascii=False)[:1800])
+        except Exception as e:
+            ep_results[c] = str(e)[:60]
+    print("::notice::CANDIDATE_EPS=" + json.dumps(ep_results, ensure_ascii=False)[:1800])
 
 if __name__ == "__main__":
     main()
