@@ -220,6 +220,48 @@ public final class DashboardCardRenderer {
         alarmCard.addView(togglesRow);
         root.addView(alarmCard);
 
+        // Вероятностный ресурс: сервер не отдаёт индивидуальный прогресс гаранта.
+        CatalystTracker.State catalyst = CatalystTracker.analyze(dash,
+                IdleArcApiClient.getCachedGameConfig(), CatalystTracker.getRate(ctx, now));
+        LinearLayout catalystCard = makeCard(ctx, "#191B2D", "#AB80FF");
+        catalystCard.addView(cardTitle(ctx, "✨ Астральный катализатор", "#D1B3FF"));
+        catalystCard.addView(bodyText(ctx, "В наличии: "
+                + (catalyst.count >= 0 ? catalyst.count + " шт." : "нет данных")
+                + " · по последней синхронизации", "#FFFFFF", 13f));
+        if (!catalyst.configKnown) {
+            catalystCard.addView(bodyText(ctx, "Настройки шанса не загружены. Обнови API.", "#FFD54F", 12f));
+        } else if (!catalyst.enabled) {
+            catalystCard.addView(bodyText(ctx, "Механика катализатора отключена в настройках игры.", "#FFD54F", 12f));
+        } else {
+            catalystCard.addView(bodyText(ctx, String.format(Locale.US,
+                    "Базовый шанс: %.4f%% за убийство подходящего монстра.", catalyst.baseChance * 100.0),
+                    "#E1BEE7", 12.5f));
+            if (catalyst.minLevel > 0) {
+                catalystCard.addView(bodyText(ctx, "Минимальный уровень монстра: " + catalyst.minLevel
+                        + (catalyst.currentLevel > 0 ? " · текущий эффективный: " + catalyst.currentLevel : " · текущий уровень неизвестен"),
+                        "#B0BEC5", 12f));
+            }
+            if (catalyst.currentLevel > 0 && catalyst.minLevel > 0 && catalyst.currentLevel < catalyst.minLevel) {
+                catalystCard.addView(bodyText(ctx, "Текущий уровень ниже необходимого для выпадения с монстров.", "#FFCC80", 12f));
+            } else if (catalyst.meanHours > 0 && Double.isFinite(catalyst.meanHours)) {
+                long estimatedMs = (long) Math.min(Long.MAX_VALUE, catalyst.meanHours * 3_600_000.0);
+                catalystCard.addView(bodyText(ctx, "Ориентировочное среднее время: "
+                        + RadarTimeParser.formatRemaining(estimatedMs) + ".", "#80DEEA", 12.5f));
+                catalystCard.addView(bodyText(ctx, String.format(Locale.US,
+                        "Темп прогресса этажа: %.0f/ч · базовая вероятность за час: %.1f%%",
+                        catalyst.progressPerHour, catalyst.oneHourChance * 100.0), "#B3E5FC", 12f));
+                catalystCard.addView(bodyText(ctx, "Это статистическая оценка при прежнем темпе, без учёта гаранта и неизвестных бонусов, а не точный таймер.", "#B0BEC5", 11.5f));
+            } else if (catalyst.baseChance > 0) {
+                catalystCard.addView(bodyText(ctx, "Для оценки времени обнови API, затем пофарми на том же этаже и обнови снова через 1–2 минуты.", "#B0BEC5", 12f));
+            }
+            if (catalyst.pityKills > 0) {
+                catalystCard.addView(bodyText(ctx, "Порог гаранта в настройках: " + catalyst.pityKills
+                        + " убийств. Текущий прогресс гаранта сервер не сообщает.", "#B0BEC5", 11.5f));
+            }
+            catalystCard.addView(bodyText(ctx, "Выпадение случайно: точное время следующего катализатора неизвестно.", "#90A4AE", 11.5f));
+        }
+        root.addView(catalystCard);
+
         // 2. Живой монитор текущего боя и этажа
         ApiFeatureAnalyzers.CombatStatus cs = ApiFeatureAnalyzers.analyzeCombat(dash, profile);
         if (cs != null) {

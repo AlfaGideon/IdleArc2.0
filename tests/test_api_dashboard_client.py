@@ -65,6 +65,27 @@ public class ApiClientSuite {
         if (!cond) throw new RuntimeException("ASSERT FAILED: " + msg);
     }
 
+    static class MemPrefs implements android.content.SharedPreferences {
+        final java.util.Map<String,Object> data = new java.util.HashMap<>();
+        public boolean getBoolean(String k, boolean d) { return data.containsKey(k) ? (Boolean)data.get(k) : d; }
+        public int getInt(String k, int d) { return data.containsKey(k) ? (Integer)data.get(k) : d; }
+        public long getLong(String k, long d) { return data.containsKey(k) ? (Long)data.get(k) : d; }
+        public float getFloat(String k, float d) { return data.containsKey(k) ? (Float)data.get(k) : d; }
+        public String getString(String k, String d) { return data.containsKey(k) ? (String)data.get(k) : d; }
+        public Editor edit() { return new Editor() {
+            public Editor putBoolean(String k, boolean v) { data.put(k,v); return this; }
+            public Editor putInt(String k, int v) { data.put(k,v); return this; }
+            public Editor putFloat(String k, float v) { data.put(k,v); return this; }
+            public Editor putLong(String k, long v) { data.put(k,v); return this; }
+            public Editor putString(String k, String v) { data.put(k,v); return this; }
+            public void apply() {}
+        }; }
+    }
+    static class MemContext extends android.content.Context {
+        final MemPrefs prefs = new MemPrefs();
+        public android.content.SharedPreferences getSharedPreferences(String n, int m) { return prefs; }
+    }
+
     private static String inventoryPage(int page, int total, String nextKey) {
         int last = (total + 9) / 10;
         StringBuilder b = new StringBuilder("{\\"characterItemsPaginated\\":{\\"total\\":" + total
@@ -328,6 +349,38 @@ public class ApiClientSuite {
         check(!RadarTimeParser.parseRadar(floorOnly, nowMs, lockedBoss, nowMs).bossFightReady,
                 "no false ready alert when server says unavailable without timer");
 
+        // Настройки из реального /api/config/game и количество из /api/dashboard.
+        Map<String, Object> catalystConfig = SimpleJson.parseObject("{\\"itemization\\":{\\"drop_bonus_enhancement\\":{\\"enabled\\":true,\\"catalyst\\":{\\"min_monster_level\\":260,\\"drop_chance\\":0.00007,\\"pity_kills\\":16000}}}}");
+        Map<String, Object> cDash1 = SimpleJson.parseObject("{\\"characterId\\":1,\\"currentBiomeId\\":2,\\"craftingMaterials\\":{\\"astral-catalyst\\":3},\\"monsterLevelProgress\\":{\\"monster_level\\":300,\\"selected_monster_level\\":300,\\"effective_fighting_level\\":280,\\"kills\\":\\"1000\\"}}");
+        Map<String, Object> cDash2 = SimpleJson.parseObject("{\\"characterId\\":1,\\"currentBiomeId\\":2,\\"craftingMaterials\\":{\\"astral-catalyst\\":4},\\"monsterLevelProgress\\":{\\"monster_level\\":300,\\"selected_monster_level\\":300,\\"effective_fighting_level\\":280,\\"kills\\":\\"1100\\"}}");
+        CatalystTracker.State catalyst = CatalystTracker.analyze(cDash1, catalystConfig, 1000);
+        check(catalyst.count == 3 && catalyst.minLevel == 260 && catalyst.pityKills == 16000 && Math.abs(catalyst.baseChance * 100 - 0.007) < 0.000001, "catalyst count, base chance and config");
+        check(Math.abs(catalyst.meanHours - 1.0 / 0.07) < 0.001 && catalyst.oneHourChance > 0.067 && catalyst.oneHourChance < 0.068, "probabilistic estimate from observed progress");
+        CatalystTracker.State missingCatalyst = CatalystTracker.analyze(SimpleJson.parseObject("{}"), null, 1000);
+        check(missingCatalyst.count == -1 && !missingCatalyst.configKnown && missingCatalyst.meanHours < 0, "missing catalyst fields remain unknown");
+        Map<String, Object> lowLevel = SimpleJson.parseObject("{\\"monsterLevelProgress\\":{\\"effective_fighting_level\\":259}}");
+        check(CatalystTracker.analyze(lowLevel, catalystConfig, 1000).meanHours < 0, "no monster-drop estimate below minimum level");
+        MemContext cctx = new MemContext();
+        CatalystTracker.recordSync(cctx, cDash1, nowMs);
+        check(CatalystTracker.getRate(cctx, nowMs) < 0, "first catalyst sample has no rate");
+        CatalystTracker.recordSync(cctx, cDash2, nowMs + 60000);
+        check(Math.abs(CatalystTracker.getRate(cctx, nowMs + 60000) - 6000) < 0.01, "floor progress measured over one minute");
+        check(CatalystTracker.getRate(cctx, nowMs + 2000000) < 0, "old rate expires");
+        Map<String, Object> changedFloor = SimpleJson.parseObject("{\\"characterId\\":1,\\"currentBiomeId\\":2,\\"monsterLevelProgress\\":{\\"monster_level\\":301,\\"selected_monster_level\\":301,\\"effective_fighting_level\\":280,\\"kills\\":1200}}");
+        CatalystTracker.recordSync(cctx, changedFloor, nowMs + 120000);
+        check(CatalystTracker.getRate(cctx, nowMs + 120000) < 0, "changing floor invalidates measured rate");
+        CatalystTracker.clear(cctx);
+        check(CatalystTracker.getRate(cctx, nowMs + 120000) < 0, "logout clears rate");
+        CatalystTracker.recordSync(cctx, cDash1, nowMs + 180000);
+        CatalystTracker.recordSync(cctx, cDash2, nowMs + 240000);
+        Map<String, Object> otherCharacter = SimpleJson.parseObject("{\\"characterId\\":2,\\"currentBiomeId\\":2,\\"monsterLevelProgress\\":{\\"monster_level\\":300,\\"selected_monster_level\\":300,\\"effective_fighting_level\\":280,\\"kills\\":1500}}");
+        CatalystTracker.recordSync(cctx, otherCharacter, nowMs + 300000);
+        check(CatalystTracker.getRate(cctx, nowMs + 300000) < 0, "character switch invalidates rate");
+        check(CatalystTracker.analyze(SimpleJson.parseObject("{\\"craftingMaterials\\":{\\"astral-catalyst\\":0}}"), catalystConfig, -1).count == 0, "zero inventory is not unknown");
+        Map<String, Object> disabledCatalyst = SimpleJson.parseObject("{\\"itemization\\":{\\"drop_bonus_enhancement\\":{\\"enabled\\":false,\\"catalyst\\":{\\"min_monster_level\\":260,\\"drop_chance\\":0.00007}}}}");
+        check(CatalystTracker.analyze(cDash1, disabledCatalyst, 1000).meanHours < 0, "disabled catalyst cannot show a time");
+
+
         // Проверка отката Боя с Боссом в RadarTimeParser
         Map<String, Object> bossDash = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs / 1000L) + 1800L) + "}");
         RadarTimeParser.RadarState bossRs = RadarTimeParser.parseRadar(bossDash, nowMs);
@@ -391,6 +444,7 @@ public class ApiClientSuite {
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(SRC_DIR / "IdleArcApiClient.java"),
                 str(SRC_DIR / "InventoryPageLoader.java"),
+                str(SRC_DIR / "CatalystTracker.java"),
                 str(SRC_DIR / "RuGameDictionary.java"),
                 str(SRC_DIR / "HeroClassProfile.java"),
                 str(SRC_DIR / "BagAndPetAdvisor.java"),

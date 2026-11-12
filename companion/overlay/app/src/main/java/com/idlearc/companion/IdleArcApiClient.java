@@ -86,6 +86,7 @@ public class IdleArcApiClient {
         cachedGuildData = null;
         lastSyncTimeMs = 0L;
         if (ctx == null) return;
+        CatalystTracker.clear(ctx);
         SharedPreferences alarms = ctx.getSharedPreferences("druid_helper_alarms_v31", Context.MODE_PRIVATE);
         if (alarms != null) alarms.edit().putLong("manual_boss_deadline", 0L).apply();
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
@@ -253,6 +254,7 @@ public class IdleArcApiClient {
                     lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
                     SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash);
+                    CatalystTracker.recordSync(ctx, dash, lastSyncTimeMs);
                     // Дополнительно загружаем Инвентарь (/api/inventory), Мешок камней (/api/gems), Данжи/Боссов (/api/dungeon) и Гильдию (/api/guild)
                     String gemsJson = "";
                     try {
@@ -332,13 +334,16 @@ public class IdleArcApiClient {
                                     ed.putString("inv_page_" + (i + 1), rawInvPages.get(i));
                                 }
                             }
-                            if (cachedGameConfig == null) {
+                            long configTs = cp.getLong("game_config_ts", 0L);
+                            long configAge = System.currentTimeMillis() - configTs;
+                            if (cachedGameConfig == null || configTs <= 0 || configAge < 0 || configAge > 6 * 60 * 60 * 1000L) {
                                 try {
                                     String cfgJson = fetchPublicGameConfigJson();
                                     Map<String, Object> cfgMap = SimpleJson.parseObject(cfgJson);
                                     if (cfgMap != null && !cfgMap.isEmpty()) {
                                         cachedGameConfig = cfgMap;
-                                        ed.putString("game_config_json", cfgJson);
+                                        ed.putString("game_config_json", cfgJson)
+                                                .putLong("game_config_ts", System.currentTimeMillis());
                                     }
                                 } catch (Exception ignored) {
                                 }
