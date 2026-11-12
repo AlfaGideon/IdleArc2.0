@@ -346,6 +346,9 @@ public final class RuGameDictionary {
     public static String stanceRu(String s) {
         if (s == null || s.isEmpty()) return "Стандартная";
         String low = s.toLowerCase(Locale.ROOT);
+        if (low.equals("harmony")) return "Гармония";
+        if (low.equals("aggressive")) return "Агрессия";
+        if (low.equals("bulwark")) return "Оплот";
         if (low.contains("beast")) return "Повелитель зверей";
         if (low.contains("jugg")) return "Джаггернаут";
         if (low.contains("bers")) return "Берсерк";

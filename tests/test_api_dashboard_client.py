@@ -268,6 +268,10 @@ public class ApiClientSuite {
         for (int sid = 1; sid <= 90; sid++) {
             check(!HeroClassProfile.skillNameRu(sid, "").isEmpty(), "Skill RU #" + sid);
         }
+        String druidGuide = HeroClassProfile.buildClassGuide(HeroClassProfile.HeroClass.DRUID, DruidProfile.BuildMode.PUSH);
+        check(druidGuide.contains("Гармони") && druidGuide.contains("Повелител") && !druidGuide.contains("Лучшая стойка:"), "druid stance guide does not assume a universally best stance");
+        check(RuGameDictionary.stanceRu("harmony").equals("Гармония"), "harmony stance translated");
+        check(RuGameDictionary.stanceRu("beastmaster").equals("Повелитель зверей"), "beastmaster stance translated");
         check(HeroClassProfile.HeroClass.fromIdOrName(1, "") == HeroClassProfile.HeroClass.WARRIOR, "Warrior id=1");
         check(HeroClassProfile.HeroClass.fromIdOrName(3, "Mage") == HeroClassProfile.HeroClass.MAGE, "Mage id=3");
 
