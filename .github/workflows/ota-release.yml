@@ -82,8 +82,10 @@ jobs:
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           APKSIGNER=$(find "$SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -1)
           test -n "$APKSIGNER"
-          old_cert=$("$APKSIGNER" verify --print-certs releases/IdleArcHelper-v4.1.0.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-          new_cert=$("$APKSIGNER" verify --print-certs "releases/${{ steps.ver.outputs.apk_name }}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          "$APKSIGNER" verify --verbose --print-certs releases/IdleArcHelper-v4.1.0.apk
+          "$APKSIGNER" verify --verbose --print-certs "releases/${{ steps.ver.outputs.apk_name }}"
+          old_cert=$("$APKSIGNER" verify --verbose --print-certs releases/IdleArcHelper-v4.1.0.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          new_cert=$("$APKSIGNER" verify --verbose --print-certs "releases/${{ steps.ver.outputs.apk_name }}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
           if [ -z "$old_cert" ] || [ "$old_cert" != "$new_cert" ]; then
             echo "::error::APK signing certificates differ or could not be read (old: ${old_cert:-missing}, new: ${new_cert:-missing})"
             exit 1
