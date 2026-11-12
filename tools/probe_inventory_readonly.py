@@ -94,12 +94,22 @@ try:
     if apk.status_code != 200:
         print('::notice::APP_SCAN=HTTP_' + str(apk.status_code))
     else:
-        with zipfile.ZipFile(io.BytesIO(apk.content)) as archive:
-            names = archive.namelist()
-            libs = [n for n in names if n.endswith('/libapp.so')]
-            print('::notice::APP_STRUCTURE=' + json.dumps({'lib_count': len(libs), 'nested_apks': sum(n.endswith('.apk') for n in names), 'dex_count': sum(n.endswith('.dex') for n in names)}))
-            relevant = libs[:1] + [n for n in names if n.endswith('.dex')]
-            blob = b'\x00'.join(archive.read(n) for n in relevant)
+        parts = []
+        structures = []
+        def scan_zip(contents):
+            with zipfile.ZipFile(io.BytesIO(contents)) as archive:
+                names = archive.namelist()
+                libs = [n for n in names if n.endswith('/libapp.so')]
+                nested = [n for n in names if n.endswith('.apk')]
+                dexes = [n for n in names if n.endswith('.dex')]
+                structures.append({'libs': len(libs), 'apks': len(nested), 'dex': len(dexes)})
+                for n in libs[:1] + dexes:
+                    parts.append(archive.read(n))
+                for n in nested:
+                    scan_zip(archive.read(n))
+        scan_zip(apk.content)
+        print('::notice::APP_STRUCTURE=' + json.dumps(structures))
+        blob = b'\x00'.join(parts)
         routes = set()
         for match in re.findall(rb'/?api/[a-zA-Z0-9_/\-]{2,100}', blob):
             route = match.decode('ascii').lstrip('/')
