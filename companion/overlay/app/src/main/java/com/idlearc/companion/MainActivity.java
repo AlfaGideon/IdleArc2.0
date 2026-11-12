@@ -88,6 +88,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         profile = DruidProfile.load(this);
+        liveEnabled = getSharedPreferences("idlearc_live_settings", MODE_PRIVATE).getBoolean("activity_live", true);
 
         ScrollView rootScroll = new ScrollView(this);
         rootScrollView = rootScroll;
@@ -175,7 +176,7 @@ public class MainActivity extends Activity {
         subTopLp.topMargin = dp(6);
         subTopRow.setLayoutParams(subTopLp);
 
-        liveBtn = DashboardCardRenderer.pillButton(this, "LIVE: выкл", "#20323A", "#B0BEC5");
+        liveBtn = DashboardCardRenderer.pillButton(this, liveEnabled ? "● LIVE" : "LIVE: выкл", "#20323A", "#B0BEC5");
         liveBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (!liveEnabled && !IdleArcApiClient.hasSavedCredentials(MainActivity.this)) {
@@ -183,7 +184,8 @@ public class MainActivity extends Activity {
                     return;
                 }
                 liveEnabled = !liveEnabled;
-                liveBtn.setText(liveEnabled ? "● LIVE 1с" : "LIVE: выкл");
+                liveBtn.setText(liveEnabled ? "● LIVE" : "LIVE: выкл");
+                getSharedPreferences("idlearc_live_settings", MODE_PRIVATE).edit().putBoolean("activity_live", liveEnabled).apply();
                 if (liveEnabled && activityResumed) LiveSyncManager.get().add(MainActivity.this, MainActivity.this, liveListener, activeTab);
                 else LiveSyncManager.get().remove(MainActivity.this);
                 if (!liveEnabled) liveStatus = "";
@@ -487,6 +489,7 @@ public class MainActivity extends Activity {
                         }
                         if (!pw.isEmpty()) {
                             IdleArcApiClient.saveCredentials(MainActivity.this, em, pw, "");
+                            LiveSyncManager.get().credentialsChanged();
                         }
                         triggerApiSync(true);
                     }
@@ -498,6 +501,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
                     IdleArcApiClient.clearCredentials(MainActivity.this);
+                    LiveSyncManager.get().credentialsChanged();
                     refreshAllViews();
                 }
             });
@@ -615,7 +619,7 @@ public class MainActivity extends Activity {
             }
             @Override
             public void onRequestSync() {
-                triggerApiSync(true);
+                if (!liveEnabled) triggerApiSync(true);
             }
         };
 

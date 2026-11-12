@@ -49,6 +49,23 @@ public class IdleArcApiClient {
 
     public static boolean isSyncBusy() { return SYNC_BUSY.get(); }
     public static synchronized long getCredentialGeneration() { return authGeneration; }
+    public static synchronized String getLiveCharacterId() { return SimpleJson.str(cachedDashboard, "characterId", ""); }
+
+    // A new character must not inherit the previous character's inventory or status caches.
+    private static void clearSectionsForCharacterChange(Context ctx, Map<String, Object> oldDash, Map<String, Object> newDash) {
+        String oldId = SimpleJson.str(oldDash, "characterId", ""), newId = SimpleJson.str(newDash, "characterId", "");
+        if (oldId.isEmpty() || newId.isEmpty() || oldId.equals(newId)) return;
+        cachedInventoryItems = new ArrayList<>(); cachedInventoryTotalCount = 0;
+        lastLivePersistMs = 0L;
+        cachedGemsData = null; cachedGuildData = null; cachedDungeonData = null;
+        cachedBossFightStatus = null; cachedBossFightStatusTimeMs = 0L;
+        if (ctx != null) {
+            SharedPreferences.Editor ed = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE).edit();
+            for (int i = 1; i <= 100; i++) ed.remove("inv_page_" + i);
+            ed.remove("inv_total_cnt").remove("inv_page_cnt").remove("gems_json")
+                    .remove("guild_json").remove("dungeon_json").remove("boss_status_json").remove("boss_status_ts").apply();
+        }
+    }
 
     public interface ApiCallback {
         void onSuccess(ScreenAnalyzer.ScanResult scanResult);
@@ -75,6 +92,7 @@ public class IdleArcApiClient {
     public static synchronized void saveCredentials(Context ctx, String email, String password, String optionalBearerToken) {
         if (ctx == null) return;
         authGeneration++;
+        SnapshotHistoryTracker.clearObservation();
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
         if (sp == null) return;
         SharedPreferences.Editor ed = sp.edit();
@@ -278,6 +296,7 @@ public class IdleArcApiClient {
                     synchronized (IdleArcApiClient.class) {
                         if (syncGeneration != authGeneration) throw new Exception("Нет учётных данных API");
                         prevDash = cachedDashboard;
+                        clearSectionsForCharacterChange(ctx, prevDash, dash);
                         cachedDashboard = dash;
                         dashboardAuthGeneration = syncGeneration;
                         lastSyncTimeMs = System.currentTimeMillis();
@@ -401,51 +420,7 @@ public class IdleArcApiClient {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    if (ctx == null) throw new Exception("Нет контекста приложения");
-                    SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
-                    final long generation;
-                    synchronized (IdleArcApiClient.class) { generation = authGeneration; }
-                    String token = sp.getString("bearer_token", "");
-                    String email = sp.getString("email", "");
-                    String password = sp.getString("password", "");
-                    if (token == null || token.isEmpty()) {
-                        if (email == null || email.isEmpty() || password == null || password.isEmpty())
-                            throw new Exception("Нет учётных данных API");
-                        token = loginForBearerToken(email, password);
-                        synchronized (IdleArcApiClient.class) {
-                            if (generation != authGeneration) throw new Exception("Нет учётных данных API");
-                            sp.edit().putString("bearer_token", token).apply();
-                        }
-                    }
-                    String json;
-                    try { json = fetchDashboardJson(token); }
-                    catch (AuthExpiredException expired) {
-                        if (email == null || email.isEmpty() || password == null || password.isEmpty()) throw expired;
-                        token = loginForBearerToken(email, password);
-                        synchronized (IdleArcApiClient.class) {
-                            if (generation != authGeneration) throw new Exception("Нет учётных данных API");
-                            sp.edit().putString("bearer_token", token).apply();
-                        }
-                        json = fetchDashboardJson(token);
-                    }
-                    Map<String, Object> dash = SimpleJson.parseObject(json);
-                    if (dash == null || dash.isEmpty()) throw new Exception("Сервер вернул пустой /api/dashboard");
-                    synchronized (IdleArcApiClient.class) {
-                        if (generation != authGeneration) throw new Exception("Нет учётных данных API");
-                        long time = System.currentTimeMillis();
-                        Map<String, Object> prev = cachedDashboard;
-                        cachedDashboard = dash;
-                        dashboardAuthGeneration = generation;
-                        lastSyncTimeMs = time;
-                        boolean persist = time - lastLivePersistMs >= 15_000L || time < lastLivePersistMs;
-                        SnapshotHistoryTracker.onNewDashboardSynced(ctx, prev, dash, time, persist);
-                        CatalystTracker.recordSync(ctx, dash, time);
-                        if (persist) {
-                            ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE).edit()
-                                    .putString("dashboard_json", json).putLong("sync_ts", time).apply();
-                            lastLivePersistMs = time;
-                        }
-                    }
+                    refreshDashboardForLive(ctx);
                     if (cb != null) cb.onSuccess(null);
                 } catch (Exception e) {
                     if (cb != null) cb.onError(e.getMessage() != null ? e.getMessage() : e.toString());
@@ -456,7 +431,60 @@ public class IdleArcApiClient {
         }, "IdleArcLiveDashboard").start();
     }
 
-    public interface LiveResourceInterest { boolean isInterested(int resource); }
+    // Called only while the shared sync gate is held, including between inventory pages.
+    private static void refreshDashboardForLive(Context ctx) throws Exception {
+        if (ctx == null) throw new Exception("Нет контекста приложения");
+        SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
+        final long generation;
+        synchronized (IdleArcApiClient.class) { generation = authGeneration; }
+        String token = sp.getString("bearer_token", "");
+        String email = sp.getString("email", "");
+        String password = sp.getString("password", "");
+        if (token == null || token.isEmpty()) {
+            if (email == null || email.isEmpty() || password == null || password.isEmpty())
+                throw new Exception("Нет учётных данных API");
+            token = loginForBearerToken(email, password);
+            synchronized (IdleArcApiClient.class) {
+                if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+                sp.edit().putString("bearer_token", token).apply();
+            }
+        }
+        String json;
+        try { json = fetchDashboardJson(token); }
+        catch (AuthExpiredException expired) {
+            if (email == null || email.isEmpty() || password == null || password.isEmpty()) throw expired;
+            token = loginForBearerToken(email, password);
+            synchronized (IdleArcApiClient.class) {
+                if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+                sp.edit().putString("bearer_token", token).apply();
+            }
+            json = fetchDashboardJson(token);
+        }
+        Map<String, Object> dash = SimpleJson.parseObject(json);
+        if (dash == null || dash.isEmpty()) throw new Exception("Сервер вернул пустой /api/dashboard");
+        synchronized (IdleArcApiClient.class) {
+            if (generation != authGeneration) throw new Exception("Нет учётных данных API");
+            long time = System.currentTimeMillis();
+            Map<String, Object> prev = cachedDashboard;
+            clearSectionsForCharacterChange(ctx, prev, dash);
+            cachedDashboard = dash;
+            dashboardAuthGeneration = generation;
+            lastSyncTimeMs = time;
+            boolean persist = time - lastLivePersistMs >= 15_000L || time < lastLivePersistMs;
+            SnapshotHistoryTracker.onNewDashboardSynced(ctx, prev, dash, time, persist);
+            CatalystTracker.recordSync(ctx, dash, time);
+            if (persist) {
+                ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString("dashboard_json", json).putLong("sync_ts", time).apply();
+                lastLivePersistMs = time;
+            }
+        }
+    }
+
+    public interface LiveResourceInterest {
+        boolean isInterested(int resource);
+        void onDashboard();
+    }
     public static final String LIVE_CANCELLED = "LIVE_CANCELLED";
     public static final String LIVE_NEEDS_DASHBOARD = "LIVE_NEEDS_DASHBOARD";
 
@@ -485,10 +513,17 @@ public class IdleArcApiClient {
                     if (resource == LiveSections.INVENTORY) {
                         inventory = InventoryPageLoader.loadStrict(new InventoryPageLoader.Fetcher() {
                             private boolean first = true;
+                            private long lastDashboard = android.os.SystemClock.elapsedRealtime();
                             @Override public String get(String path) throws Exception {
                                 if (!first) Thread.sleep(350L);
                                 first = false;
                                 if (!interest.isInterested(resource)) throw new Exception(LIVE_CANCELLED);
+                                if (android.os.SystemClock.elapsedRealtime() - lastDashboard >= 1000L) {
+                                    refreshDashboardForLive(ctx);
+                                    lastDashboard = android.os.SystemClock.elapsedRealtime();
+                                    interest.onDashboard();
+                                    if (!interest.isInterested(resource)) throw new Exception(LIVE_CANCELLED);
+                                }
                                 return fetchLiveResource(ctx, path, generation);
                             }
                         });

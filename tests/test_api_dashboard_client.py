@@ -29,6 +29,8 @@ class TestApiDashboardClient(unittest.TestCase):
     def test_dashboard_json_profile_and_equipment_audit(self):
         tmp = Path(tempfile.mkdtemp(prefix="test_api_dash_"))
         try:
+            (tmp / "android" / "os").mkdir(parents=True, exist_ok=True)
+            (tmp / "android" / "os" / "SystemClock.java").write_text("package android.os; public class SystemClock { public static long elapsedRealtime(){ return System.currentTimeMillis(); } }")
             (tmp / "android" / "content").mkdir(parents=True, exist_ok=True)
             (tmp / "android" / "content" / "Context.java").write_text(
                 "package android.content;\n"
@@ -431,6 +433,11 @@ public class ApiClientSuite {
         SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, null, farm1, t0);
         check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farm1, t0).active, "first snapshot has no rate");
         check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farm1, t0).active, "old snapshot never becomes a rate as wall clock advances");
+        SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, farm1, farm2, t0 + 1000);
+        SnapshotHistoryTracker.Observation obs = SnapshotHistoryTracker.getObservation(t0 + 1000);
+        check(obs != null && obs.toMs - obs.fromMs == 1000 && obs.gold.toPlainString().equals("10")
+              && obs.rubies.compareTo(new java.math.BigDecimal("-1")) == 0 && obs.shards == null, "observed delta is exact and missing data stays unknown");
+        check(SnapshotHistoryTracker.getObservation(t0 + 2000) == null, "observation must match snapshot timestamp");
         SnapshotHistoryTracker.SessionRates farmRate = SnapshotHistoryTracker.getSessionRates(farmCtx, farm2, t0 + 60000);
         check(farmRate.active && Math.abs(farmRate.elapsedMinutes - 1) < 0.001, "snapshot interval used for rate");
         check(Math.abs(farmRate.goldPerHour - 600) < 0.001, "exact gold string avoids floating point loss");
@@ -448,6 +455,7 @@ public class ApiClientSuite {
         check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 200000).active, "never mix characters");
         SnapshotHistoryTracker.onNewDashboardSynced(farmCtx, farm2, farmOther, t0 + 200000);
         check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 200000).active, "character switch starts a new session");
+        check(SnapshotHistoryTracker.getObservation(t0 + 200000) == null, "observations never cross characters");
         SnapshotHistoryTracker.clearFarmSession(farmCtx);
         check(!SnapshotHistoryTracker.getSessionRates(farmCtx, farmOther, t0 + 300000).active, "logout clears farm session");
         Map<String, Object> hugeWithoutString = SimpleJson.parseObject("{\\"characterId\\":2,\\"goldAmount\\":9007199254740993000000}");
@@ -596,6 +604,7 @@ public class ApiClientSuite {
         final boolean[] interested = {true};
         IdleArcApiClient.LiveResourceInterest interest = new IdleArcApiClient.LiveResourceInterest() {
             public boolean isInterested(int resource) { return interested[0]; }
+            public void onDashboard() {}
         };
         java.util.concurrent.CountDownLatch bagDone = new java.util.concurrent.CountDownLatch(1);
         final String[] bagError = {null};
@@ -629,6 +638,44 @@ public class ApiClientSuite {
         check(notVisible.await(5, java.util.concurrent.TimeUnit.SECONDS) && IdleArcApiClient.LIVE_CANCELLED.equals(notVisibleReason[0])
                 && FakeConnection.paths.isEmpty(), "hidden bag starts no requests");
 
+        // A long inventory traversal must continue sampling dashboard without overlapping requests.
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        interested[0]=true;
+        FakeConnection.paths.clear();
+        FakeConnection.bodies.put("/api/inventory", inventoryPage(1, 41, "page"));
+        for (int page=2; page<=5; page++) {
+            String raw = inventoryPage(page, 41, "page");
+            FakeConnection.bodies.put("/api/items-page/"+page,
+                    raw.substring(raw.indexOf("{", raw.indexOf("characterItemsPaginated")), raw.length()-1));
+        }
+        final int[] progress={0};
+        IdleArcApiClient.LiveResourceInterest longInterest=new IdleArcApiClient.LiveResourceInterest() {
+            public boolean isInterested(int resource) { return true; }
+            public void onDashboard() { progress[0]++; }
+        };
+        java.util.concurrent.CountDownLatch longBag = new java.util.concurrent.CountDownLatch(1);
+        final String[] longError={null};
+        IdleArcApiClient.syncLiveSectionAsync(liveCtx, LiveSections.INVENTORY, longInterest, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { longBag.countDown(); }
+            public void onError(String err) { longError[0]=err; longBag.countDown(); }
+        });
+        check(longBag.await(8, java.util.concurrent.TimeUnit.SECONDS) && longError[0]==null, "long bag completes");
+        check(progress[0]>0 && FakeConnection.paths.contains("/api/dashboard")
+                && IdleArcApiClient.getCachedInventoryItems().size()==41, "dashboard sampled during paginated bag refresh");
+
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        FakeConnection.bodies.put("/api/dashboard", "{\\"characterId\\":2,\\"level\\":11}");
+        java.util.concurrent.CountDownLatch switched = new java.util.concurrent.CountDownLatch(1);
+        final String[] switchError = {null};
+        IdleArcApiClient.syncDashboardAsync(liveCtx, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { switched.countDown(); }
+            public void onError(String err) { switchError[0]=err; switched.countDown(); }
+        });
+        check(switched.await(5, java.util.concurrent.TimeUnit.SECONDS) && switchError[0] == null
+                && IdleArcApiClient.getCachedInventoryItems().isEmpty(), "switching character clears old bag");
+        check(SnapshotHistoryTracker.getObservation(IdleArcApiClient.getLastSyncTimeMs()) == null,
+                "switching character does not produce fake resource changes");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -637,6 +684,7 @@ public class ApiClientSuite {
             )
 
             java_files = [
+                str(tmp / "android" / "os" / "SystemClock.java"),
                 str(tmp / "android" / "content" / "Context.java"),
                 str(tmp / "android" / "content" / "SharedPreferences.java"),
                 str(SRC_DIR / "SimpleJson.java"),

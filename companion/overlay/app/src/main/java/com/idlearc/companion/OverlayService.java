@@ -51,7 +51,7 @@ public class OverlayService extends Service {
     private DruidProfile profile;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private boolean syncInFlight = false;
-    private int autoSyncSec = 0; // 0 = выкл, 1 = LIVE dashboard, 30/60 = full sync
+    private int autoSyncSec = 1; // 0 = off, 1 = LIVE, 30/60 = full sync
     private String liveStatus = "";
     private long lastInteractionMs;
     private ScrollView bodyScrollView;
@@ -120,6 +120,8 @@ public class OverlayService extends Service {
     public void onCreate() {
         super.onCreate();
         running = true;
+        autoSyncSec = getSharedPreferences("idlearc_live_settings", MODE_PRIVATE).getInt("widget_mode", 1);
+        if (autoSyncSec != 0 && autoSyncSec != 1 && autoSyncSec != 30 && autoSyncSec != 60) autoSyncSec = 1;
         profile = DruidProfile.load(this);
         IdleArcApiClient.ensureCacheLoaded(this, profile);
         startForegroundWithNotification();
@@ -152,7 +154,8 @@ public class OverlayService extends Service {
         rootContainer.addView(bubbleView);
         rootContainer.addView(cardView);
         wm.addView(rootContainer, winParams);
-
+        if (autoSyncSec == 1) LiveSyncManager.get().add(this, this, liveListener, -1);
+        else if (autoSyncSec > 0) uiHandler.postDelayed(autoSyncRunnable, autoSyncSec * 1000L);
         refreshPanelContent();
     }
 
@@ -260,7 +263,8 @@ public class OverlayService extends Service {
         });
         topBar.addView(syncBtn, marginRightLp(4));
 
-        autoSyncBtn = miniBtn("⏱ Выкл", "#1B2834", "#B0BEC5");
+        autoSyncBtn = miniBtn(autoSyncSec == 1 ? "● LIVE" : autoSyncSec > 1 ? "⏱ " + autoSyncSec + "с" : "⏱ Выкл", "#1B2834", "#B0BEC5");
+        if (autoSyncSec > 0) styleMini(autoSyncBtn, "#1B4332", "#69F0AE", true);
         autoSyncBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -379,11 +383,13 @@ public class OverlayService extends Service {
             } else {
                 autoSyncBtn.setText("● LIVE");
                 styleMini(autoSyncBtn, "#1B4332", "#69F0AE", true);
-                LiveSyncManager.get().add(this, this, liveListener, activeTab);
-                Toast.makeText(this, "LIVE обновляет только открытую вкладку. При сворачивании опрос приостанавливается.", Toast.LENGTH_LONG).show();
+                getSharedPreferences("idlearc_live_settings", MODE_PRIVATE).edit().putInt("widget_mode", autoSyncSec).apply();
+                LiveSyncManager.get().add(this, this, liveListener, cardView != null && cardView.getVisibility() == View.VISIBLE ? activeTab : -1);
+                Toast.makeText(this, "LIVE собирает данные в фоне и обновляет открытую вкладку.", Toast.LENGTH_LONG).show();
                 return;
             }
         }
+        getSharedPreferences("idlearc_live_settings", MODE_PRIVATE).edit().putInt("widget_mode", autoSyncSec).apply();
         liveStatus = "";
         if (autoSyncSec > 0) {
             autoSyncBtn.setText("⏱ " + autoSyncSec + "с");
@@ -489,7 +495,7 @@ public class OverlayService extends Service {
             }
             @Override
             public void onRequestSync() {
-                triggerApiSync(true);
+                if (autoSyncSec != 1) triggerApiSync(true);
             }
         };
 

@@ -25,6 +25,45 @@ public class SnapshotHistoryTracker {
     private static volatile String lastDiffSummary = "";
     private static volatile boolean lastDiffPositive = true;
 
+    /** Difference between two received API snapshots, not a server combat tick or gross loot. */
+    public static final class Observation {
+        public final long fromMs, toMs;
+        public final BigDecimal gold, dust, shards, rubies;
+        private Observation(long fromMs, long toMs, BigDecimal gold, BigDecimal dust, BigDecimal shards, BigDecimal rubies) {
+            this.fromMs = fromMs; this.toMs = toMs;
+            this.gold = gold; this.dust = dust; this.shards = shards; this.rubies = rubies;
+        }
+    }
+    private static final class Sample {
+        final String character;
+        final long time;
+        final BigDecimal gold, dust, shards, rubies;
+        Sample(Map<String, Object> dash, long time) {
+            this.character = SimpleJson.str(dash, "characterId", ""); this.time = time;
+            gold = resource(dash, "goldAmount", "goldAmountStr");
+            dust = resource(dash, "gemDust", "gemDustStr");
+            shards = resource(dash, "petShardsAmount", "petShardsAmountStr");
+            rubies = resource(dash, "rubyAmount", "rubyAmountStr");
+        }
+    }
+    private static Sample previousSample;
+    private static Observation observation;
+    private static BigDecimal difference(BigDecimal a, BigDecimal b) {
+        return a == null || b == null ? null : b.subtract(a);
+    }
+    private static synchronized void recordObservation(Map<String, Object> dash, long time) {
+        Sample next = new Sample(dash, time), prev = previousSample;
+        observation = prev != null && !next.character.isEmpty() && next.character.equals(prev.character)
+                && next.time > prev.time ? new Observation(prev.time, next.time,
+                difference(prev.gold, next.gold), difference(prev.dust, next.dust),
+                difference(prev.shards, next.shards), difference(prev.rubies, next.rubies)) : null;
+        previousSample = next.character.isEmpty() || time <= 0 ? null : next;
+    }
+    public static synchronized Observation getObservation(long snapshotTimeMs) {
+        return observation != null && observation.toMs == snapshotTimeMs ? observation : null;
+    }
+    public static synchronized void clearObservation() { previousSample = null; observation = null; }
+
     public static class SessionRates {
         public final boolean active;
         public final double elapsedMinutes;
@@ -78,6 +117,7 @@ public class SnapshotHistoryTracker {
 
     public static void onNewDashboardSynced(Context ctx, Map<String, Object> prevDash, Map<String, Object> newDash, long snapshotTimeMs, boolean recordDaily) {
         if (newDash == null) return;
+        recordObservation(newDash, snapshotTimeMs);
 
         // 1. Считаем дельту «До / После» относительно предыдущего слепка
         if (prevDash != null && !prevDash.isEmpty()) {
@@ -194,6 +234,7 @@ public class SnapshotHistoryTracker {
 
     public static void requestFarmSessionReset(Context ctx, long requestedMs) {
         if (ctx == null) return;
+        clearObservation();
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (sp != null) sp.edit().putBoolean("farm_reset_pending_v2", true)
                 .putLong("farm_reset_requested_v2", requestedMs).apply();
@@ -206,6 +247,7 @@ public class SnapshotHistoryTracker {
     }
 
     public static void clearFarmSession(Context ctx) {
+        clearObservation();
         if (ctx == null) return;
         SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (sp != null) sp.edit().putLong("farm_start_v2", 0L)

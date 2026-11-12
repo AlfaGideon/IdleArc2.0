@@ -30,9 +30,16 @@ public final class LiveSyncManager {
     private boolean paused, pending, scheduled, dashboardNext = true;
     private long retryNotBefore;
     private long seenCredentialGeneration = -1L;
+    private String seenCharacter = "";
     private String errorStatus = "";
     private final IdleArcApiClient.LiveResourceInterest interest = new IdleArcApiClient.LiveResourceInterest() {
         @Override public boolean isInterested(int resource) { return (wantedMask & (1 << resource)) != 0; }
+        @Override public void onDashboard() {
+            handler.post(new Runnable() { @Override public void run() {
+                notifyStatus();
+                for (Owner o : new ArrayList<>(owners.values())) if (o.tab >= 0) o.listener.onLiveData();
+            }});
+        }
     };
     private final Runnable tick = new Runnable() {
         @Override public void run() {
@@ -114,6 +121,18 @@ public final class LiveSyncManager {
         if (empty) { generation++; paused = false; failures = 0; dashboardNext = true; }
         recomputeMask(); notifyStatus(); schedule(0);
     }
+    /** Re-evaluate a paused poll after login/logout; discard callbacks from the old account. */
+    public void credentialsChanged() {
+        generation++;
+        paused = false;
+        failures = 0;
+        errorStatus = "";
+        dashboardNext = true;
+        handler.removeCallbacks(tick);
+        scheduled = false;
+        notifyStatus();
+        schedule(0);
+    }
     public void setTab(Object owner, int tab) {
         Owner o = owners.get(owner);
         if (o == null || o.tab == tab) return;
@@ -136,8 +155,8 @@ public final class LiveSyncManager {
         wantedMask = mask;
     }
     private boolean hasVisibleOwner() {
-        for (Owner o : owners.values()) if (o.tab >= 0) return true;
-        return false;
+        // A running collapsed foreground widget still samples the dashboard for farm history.
+        return !owners.isEmpty();
     }
     private int chooseResource() {
         if (dashboardNext || IdleArcApiClient.getLastSyncTimeMs() <= 0) return -1;
@@ -158,15 +177,17 @@ public final class LiveSyncManager {
     }
     private void notifyStatus() {
         long currentGeneration = IdleArcApiClient.getCredentialGeneration();
-        if (currentGeneration != seenCredentialGeneration) {
+        String character = IdleArcApiClient.getLiveCharacterId();
+        if (currentGeneration != seenCredentialGeneration || !character.equals(seenCharacter)) {
             java.util.Arrays.fill(resourceTimes, 0L);
             java.util.Arrays.fill(resourceDue, 0L);
             java.util.Arrays.fill(resourceErrors, null);
             java.util.Arrays.fill(resourceFailures, 0);
             seenCredentialGeneration = currentGeneration;
+            seenCharacter = character;
         }
         for (Owner o : new ArrayList<>(owners.values())) {
-            if (o.tab < 0) { o.listener.onLiveStatus("LIVE: окно свёрнуто"); continue; }
+            if (o.tab < 0) { o.listener.onLiveStatus("LIVE: фоновый сбор данных"); continue; }
             if (!errorStatus.isEmpty()) { o.listener.onLiveStatus(errorStatus); continue; }
             StringBuilder text = new StringBuilder("LIVE: данные ").append(time(IdleArcApiClient.getLastSyncTimeMs()));
             int mask = LiveSections.maskForTab(o.tab);

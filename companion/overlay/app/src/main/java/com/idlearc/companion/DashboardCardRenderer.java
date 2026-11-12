@@ -318,11 +318,20 @@ public final class DashboardCardRenderer {
         fHead.addView(resetBtn);
         farmCard.addView(fHead);
 
+        SnapshotHistoryTracker.Observation observed = SnapshotHistoryTracker.getObservation(IdleArcApiClient.getLastSyncTimeMs());
+        if (observed != null) {
+            farmCard.addView(bodyText(ctx, String.format(Locale.US,
+                    "Последнее изменение за %.1f с: 🪙 %s · ✨ %s · 🐾 %s · 💎 %s",
+                    (observed.toMs - observed.fromMs) / 1000.0, observedDelta(observed.gold),
+                    observedDelta(observed.dust), observedDelta(observed.shards), observedDelta(observed.rubies)), "#80CBC4", 11.5f));
+        } else {
+            farmCard.addView(bodyText(ctx, "Для последнего изменения нужны два полученных ответа API.", "#90A4AE", 11.5f));
+        }
         if (SnapshotHistoryTracker.isFarmResetPending(ctx)) {
-            farmCard.addView(bodyText(ctx, "Ожидаю обновление API для начала нового замера. Если оно не началось, нажми «Обновить API».", "#90A4AE", 12f));
+            farmCard.addView(bodyText(ctx, "Ожидаю свежий ответ API для начала нового замера.", "#90A4AE", 12f));
         } else if (!rates.active) {
             farmCard.addView(bodyText(ctx,
-                    "Нужны два снимка: обнови API, подожди хотя бы 30 секунд и обнови снова. Для более стабильной оценки подожди 1–2 минуты.",
+                    "Среднее появится после двух полученных ответов с интервалом не менее 30 секунд. Для стабильности подожди 1–2 минуты.",
                     "#90A4AE", 12f));
         } else {
             long syncTime = IdleArcApiClient.getLastSyncTimeMs();
@@ -341,7 +350,7 @@ public final class DashboardCardRenderer {
             addSpace(ctx, g2, 6);
             g2.addView(statTile(ctx, "🆙 Уровней/ч", farmRateText(rates.levelsPerHour, true), "#69F0AE"));
             farmCard.addView(g2);
-            farmCard.addView(bodyText(ctx, "Это среднее изменение баланса между снимками, а не чистый дроп: учитываются траты, покупки, награды и перерывы. Минус означает уменьшение запаса. Уровни/ч приблизительны из-за округления прогресса игрой.", "#B0BEC5", 11.5f));
+            farmCard.addView(bodyText(ctx, "Изменения — разница ответов API, не игровые тики и не чистый дроп: включены траты, покупки и награды. Минус — уменьшение запаса. Уровни/ч приблизительны из-за округления.", "#B0BEC5", 11.5f));
             farmCard.addView(bodyText(ctx, "Значения пересчитываются только после обновления API; — означает, что данных недостаточно.", "#90A4AE", 11f));
         }
         root.addView(farmCard);
@@ -360,6 +369,12 @@ public final class DashboardCardRenderer {
             }
         }
         root.addView(sigCard);
+    }
+
+    private static String observedDelta(java.math.BigDecimal value) {
+        if (value == null) return "—";
+        String text = value.stripTrailingZeros().toPlainString();
+        return value.signum() > 0 ? "+" + text : text;
     }
 
     private static String farmRateText(double value, boolean precise) {
