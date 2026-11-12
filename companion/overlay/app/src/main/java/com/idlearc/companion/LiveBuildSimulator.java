@@ -123,8 +123,8 @@ public class LiveBuildSimulator {
                     petDmgAdditivePct += 0.05 * deltaVal;
                     break;
                 case DEXTERITY:
-                    // primary_stats.dexterity: +0.10% Pet + 0.05% Dodge
-                    petDmgAdditivePct += 0.10 * deltaVal;
+                    // Ловкость Друида: профильное масштабирование урона питомцев + уклонение
+                    petDmgAdditivePct += 0.25 * deltaVal;
                     dodgeRawPct += 0.05 * deltaVal;
                     break;
                 case STRENGTH:
@@ -222,14 +222,15 @@ public class LiveBuildSimulator {
 
         if (p != null && p.hasScannedStats) {
             s.flatMaxHp = p.maxHp > 0 ? p.maxHp : (250.0 * scale);
-            double passiveHpEst = Math.max(scale * 14.0, Math.max(p.gearScore * 0.22, (p.charLevel - 1) * 2.5));
+            double passiveHpEst = Math.max(scale * 18.0,
+                    Math.max(p.maxHp / 85.0, Math.max(p.gearScore * 0.45, (p.charLevel - 1) * 4.0)));
             s.maxHpPctBonus = 0.50 * Math.max(0.0, p.strength) + passiveHpEst;
 
             double sheetAvgAtk = (p.minAtk > 0 && p.maxAtk > 0) ? 0.5 * (p.minAtk + p.maxAtk)
                     : (p.maxAtk > 0 ? p.maxAtk : 0.0);
             double atkPoolEst = 100.0 + 0.38 * p.intelligence + 0.75 * p.strength;
             s.flatWeaponBaseAtk = itemHeaderAtk > 0 ? itemHeaderAtk
-                    : (sheetAvgAtk > 0 ? Math.max(80.0, sheetAvgAtk / (1.0 + atkPoolEst / 100.0)) : (220.0 * scale));
+                    : (sheetAvgAtk > 0 ? Math.max(400.0 * scale, sheetAvgAtk / (1.0 + atkPoolEst / 100.0)) : (1150.0 * scale));
             s.flatAddedAtk = 0.0;
             s.atkDmgAdditivePct = 0.38 * p.intelligence + 0.75 * p.strength;
 
@@ -237,16 +238,25 @@ public class LiveBuildSimulator {
             if (p.petDamageBonusPct > 0.0) {
                 s.petDmgAdditivePct = p.petDamageBonusPct;
             } else {
-                double fromStatsPet = 0.10 * p.agility + 0.05 * p.intelligence + 20.0 * p.bonusAllClassSkills;
+                double fromStatsPet = 0.25 * p.agility + 0.05 * p.intelligence + 20.0 * p.bonusAllClassSkills;
                 double fromMultPet = 0.0;
                 if (p.petDamageMultMillions > 0.0) {
                     double rawMult = p.petDamageMultMillions * 1_000_000.0;
-                    fromMultPet = Math.pow(Math.max(1.0, rawMult), 0.44) * 1.15;
+                    fromMultPet = Math.min(1350.0, Math.pow(Math.max(1.0, rawMult), 0.34) * 2.2);
                 }
-                s.petDmgAdditivePct = Math.max(fromStatsPet, Math.max(fromMultPet, scale * 45.0));
+                s.petDmgAdditivePct = Math.max(fromStatsPet, Math.max(fromMultPet, Math.min(1100.0, scale * 18.0)));
             }
-            s.petShareOfDps = p.petDamageMultMillions >= 0.01 ? 0.985
-                    : (s.petDmgAdditivePct >= 300.0 ? 0.92 : 0.75);
+            int effCls = p.effectiveClassId();
+            if (effCls == 5) {
+                s.petShareOfDps = p.petDamageMultMillions >= 0.01 ? 0.985
+                        : (s.petDmgAdditivePct >= 300.0 ? 0.92 : 0.75);
+            } else if (effCls == 2) {
+                // Лучник: прямой урон героя + ветка Зверолова (Альфа-удар удваивает обоих)
+                s.petShareOfDps = 0.22;
+            } else {
+                // Воин (1), Маг (3), Разбойник (4): 95%+ урона наносят прямые удары и проки самого героя
+                s.petShareOfDps = 0.05;
+            }
 
             s.critChancePct = p.critChance;
             s.critDamagePct = p.critDamage;
@@ -276,7 +286,7 @@ public class LiveBuildSimulator {
             // все базовые величины выводятся пропорционально масштабу самого открытого на экране предмета!
             s.flatMaxHp = Math.max(300.0, scale * 220.0);
             s.maxHpPctBonus = 0.0;
-            s.flatWeaponBaseAtk = itemHeaderAtk > 0 ? itemHeaderAtk : Math.max(60.0, scale * 180.0);
+            s.flatWeaponBaseAtk = itemHeaderAtk > 0 ? itemHeaderAtk : Math.max(120.0, scale * 950.0);
             s.flatAddedAtk = 0.0;
             s.atkDmgAdditivePct = scale * 18.0;
             s.petDmgAdditivePct = Math.max(50.0, scale * 55.0);
@@ -310,15 +320,22 @@ public class LiveBuildSimulator {
         return s;
     }
 
-    /** Точная формула крит-множителя IdleArc (с конверсией CC > 100% -> 1:1 в Крит. урон) */
+    public static final double CRIT_CHANCE_CAP_PCT = 100.0;
+    public static final double CRIT_DAMAGE_SOFT_CAP_PCT = 1500.0;
+
+    /**
+     * Формула эффективного крит-множителя:
+     * - Шанс крита работает строго до 100% вероятности крита (выше 100% все удары уже критуют -> +0% прироста).
+     * - Крит. урон до порога насыщения 1500% даёт полную отдачу 1:1, а свыше 1500% уходит в сильное затухание,
+     *   поэтому после 1500% Крит. урона суффиксы Интеллекта, Ловкости, Двойного удара и Двойного урона намного сильнее.
+     */
     public static double critMultiplier(HeroState s) {
-        double cc = Math.max(0.0, s.critChancePct);
-        double cd = Math.max(0.0, s.critDamagePct);
-        if (cc <= 100.0) {
-            return 1.0 + (cc / 100.0) * (cd / 100.0);
-        }
-        double effCd = cd + (cc - 100.0);
-        return 1.0 + effCd / 100.0;
+        double effCc = Math.min(CRIT_CHANCE_CAP_PCT, Math.max(0.0, s.critChancePct));
+        double rawCd = Math.max(0.0, s.critDamagePct);
+        double effCd = rawCd <= CRIT_DAMAGE_SOFT_CAP_PCT
+                ? rawCd
+                : (CRIT_DAMAGE_SOFT_CAP_PCT + (rawCd - CRIT_DAMAGE_SOFT_CAP_PCT) * 0.12);
+        return 1.0 + (effCc / 100.0) * (effCd / 100.0);
     }
 
     /** Точный расчёт эффективного DPS состояния HeroState */
@@ -542,21 +559,26 @@ public class LiveBuildSimulator {
                 return String.format(Locale.US, "множитель дв.урона ×%.2f→×%.2f => +%.2f%% DPS",
                         1.0 + before.doubleDamagePct / 100.0, 1.0 + after.doubleDamagePct / 100.0, dpsPct);
             case CRIT_DAMAGE:
+                if (before.critDamagePct >= CRIT_DAMAGE_SOFT_CAP_PCT) {
+                    return String.format(Locale.US, "крит. урон %.0f%% > порога 1500%% (насыщение) => +%.2f%% DPS",
+                            before.critDamagePct, dpsPct);
+                }
                 return String.format(Locale.US, "крит-множ. ×%.2f→×%.2f => +%.2f%% DPS",
                         critMultiplier(before), critMultiplier(after), dpsPct);
             case CRIT_CHANCE:
-                if (before.critChancePct >= 100.0) {
-                    return String.format(Locale.US, "оверкап крита >100%% (1:1 в Крит.урон): ×%.2f→×%.2f => +%.2f%% DPS",
-                            critMultiplier(before), critMultiplier(after), dpsPct);
+                if (before.critChancePct >= CRIT_CHANCE_CAP_PCT) {
+                    return String.format(Locale.US, "шанс крита уже %.1f%% >= 100%% (кап закрыт) => +0.00%% DPS",
+                            before.critChancePct);
                 }
                 return String.format(Locale.US, "шанс крита %.0f%%→%.0f%% (крит-множ. ×%.2f→×%.2f) => +%.2f%% DPS",
-                        before.critChancePct, after.critChancePct, critMultiplier(before), critMultiplier(after), dpsPct);
+                        before.critChancePct, Math.min(100.0, after.critChancePct),
+                        critMultiplier(before), critMultiplier(after), dpsPct);
             case INTELLIGENCE:
                 return String.format(Locale.US, "+%.1f%% Дв.урона + %.1f%% Пета => +%.2f%% DPS",
                         roll * 0.20, roll * 0.05, dpsPct);
             case DEXTERITY:
                 return String.format(Locale.US, "+%.1f%% Пета => +%.2f%% DPS, +%.2f%% EHP (уклонение %.1f%%→%.1f%% при капе 95%%)",
-                        roll * 0.10, dpsPct, ehpPct, before.dodgeRawPct, after.dodgeRawPct);
+                        roll * 0.25, dpsPct, ehpPct, before.dodgeRawPct, after.dodgeRawPct);
             case STRENGTH:
                 return String.format(Locale.US, "+%.1f%% HP => +%.2f%% DPS, +%.2f%% EHP",
                         roll * 0.50, dpsPct, ehpPct);

@@ -80,7 +80,7 @@ public class DruidKnowledgeBase {
                 "БЕЗ ЛИМИТА. Масштабирует получение золота.", 14));
         SKILLS.add(new SkillInfo("druid_earthbind", "Земные путы", "Туннели", 2, 5,
                 "+3% шанса крит. удара за уровень навыка", false, 0,
-                "БЕЗ ЛИМИТА. Сверх 100% шанса крита каждый 1% переходит 1:1 в крит. урон.", 12));
+                "БЕЗ ЛИМИТА УЗЛА. При общем шансе крита героя >= 100% все удары уже критические, поэтому доп. шанс крита на вещах не нужен.", 12));
         SKILLS.add(new SkillInfo("druid_undermine", "Подкоп", "Туннели", 3, 5,
                 "Мгновенная казнь врага при HP <= 2% за уровень (ЛИМИТ: макс. 35%)", true, 18,
                 "ЛИМИТ 35% HP (18 эфф. уровней) — мгновенное добивание обычных и элитных врагов.", 4));
@@ -188,6 +188,8 @@ public class DruidKnowledgeBase {
                 .replaceAll("\\s+", " ")
                 .replace("коита", "крита")
                 .replace("коит.", "крит.")
+                .replace("харакшристик", "характеристик")
+                .replace("характеристи", "характеристи")
                 .replace("двсйного", "двойного")
                 .replace("двоиного", "двойного")
                 .replace("двойного мара", "двойного удара")
@@ -367,41 +369,72 @@ public class DruidKnowledgeBase {
     }
 
     /**
-     * Извлекает числовое значение из OCR-строки с поддержкой разорванных пробелами чисел
-     * («1 0.79K» -> 10790, «1 .08K» -> 1080, «1 190.0%» -> 1190.0, «1051 .0%» -> 1051.0, «+21 3%» -> 213).
+     * Исправляет оптические подмены цифр в низкоконтрастном тексте (например, серое «(110.5%)» -> «(11С.5%)»,
+     * «2О58%» -> «2058%», «(95.С%)» -> «(95.0%)») строго внутри числового контекста, не затрагивая слова
+     * и маркер переноса строки «+55% l».
      */
-    public static double extractFirstNumber(String s) {
-        if (s == null) return 0.0;
+    public static String repairNumericOcr(String s) {
+        if (s == null || s.isEmpty()) return "";
         String cleaned = s
                 .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
                 .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
-        double best = 0.0;
-        while (m.find()) {
-            try {
-                double v = Double.parseDouble(m.group(1).replace(',', '.'));
-                String suf = m.group(2);
-                if (suf != null) {
-                    String sl = suf.toLowerCase(Locale.ROOT);
-                    if (sl.equals("k") || sl.equals("к")) v *= 1_000.0;
-                    else if (sl.equals("m") || sl.equals("м")) v *= 1_000_000.0;
-                    else if (sl.equals("b") || sl.equals("б")) v *= 1_000_000_000.0;
+        int n = cleaned.length();
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            char ch = cleaned.charAt(i);
+            char prev = i > 0 ? sb.charAt(i - 1) : ' ';
+            char next = (i + 1 < n) ? cleaned.charAt(i + 1) : ' ';
+            char next2 = (i + 2 < n) ? cleaned.charAt(i + 2) : ' ';
+
+            boolean prevDigit = (prev >= '0' && prev <= '9');
+            boolean prevDec = (prev == '.' || prev == ',') && i >= 2
+                    && sb.charAt(i - 2) >= '0' && sb.charAt(i - 2) <= '9';
+            boolean prevNumStart = (prev == '(' || prev == '+' || prev == '-' || prev == ' ');
+            boolean nextDigit = (next >= '0' && next <= '9');
+            boolean nextDecDigit = (next == '.' || next == ',') && (next2 >= '0' && next2 <= '9');
+            boolean nextNumEnd = (next == '%' || next == ')' || next == 'K' || next == 'k'
+                    || next == 'К' || next == 'к' || next == 'M' || next == 'm' || next == 'М' || next == 'м');
+
+            if (ch == 'О' || ch == 'о' || ch == 'O' || ch == 'o') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd || next == ' ' || i + 1 == n)) {
+                    ch = '0';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '0';
                 }
-                best = v;
-            } catch (Exception ignored) {
+            } else if (ch == 'С' || ch == 'с' || ch == 'C' || ch == 'c') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd)) {
+                    ch = '0';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '0';
+                }
+            } else if (ch == 'З' || ch == 'з') {
+                if ((prevDigit || prevDec) && (nextDigit || nextDecDigit || nextNumEnd)) {
+                    ch = '3';
+                } else if (prevNumStart && nextDecDigit) {
+                    ch = '3';
+                }
+            } else if (ch == 'l' || ch == 'I' || ch == '|') {
+                if ((prevDigit || prevDec || prev == '(' || prev == '+')
+                        && (nextDigit || nextDecDigit || next == '%' || next == ')')) {
+                    ch = '1';
+                }
+            } else if (ch == 'Б' || ch == 'б') {
+                if ((prevDigit || prevDec || prev == '(' || prev == '+')
+                        && (nextDigit || nextDecDigit || next == '%')) {
+                    ch = '6';
+                }
             }
+            sb.append(ch);
         }
-        return best;
+        return sb.toString();
     }
 
-    /** Извлекает средний урон из диапазона вида «5879 - 10.79K» или одиночного числа */
-    public static double extractRangeAverage(String s) {
-        if (s == null) return 0.0;
-        String cleaned = s
-                .replaceAll("(?<=\\d)[\\s\\u00A0]+(?=[0-9.,])", "")
-                .replaceAll("(?<=[.,])[\\s\\u00A0]+(?=\\d)", "");
-        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
+    /** Извлекает все числа из строки по порядку (после починки OCR-подмен внутри чисел) */
+    public static List<Double> extractAllNumbers(String s) {
         List<Double> vals = new ArrayList<>();
+        if (s == null || s.isEmpty()) return vals;
+        String cleaned = repairNumericOcr(s);
+        Matcher m = Pattern.compile("([0-9]+(?:[.,][0-9]+)?)\\s*([KkКкMmМмBbБб](?![а-яА-ЯёЁa-zA-Z]))?").matcher(cleaned);
         while (m.find()) {
             try {
                 double v = Double.parseDouble(m.group(1).replace(',', '.'));
@@ -416,6 +449,21 @@ public class DruidKnowledgeBase {
             } catch (Exception ignored) {
             }
         }
+        return vals;
+    }
+
+    /**
+     * Извлекает числовое значение из OCR-строки с поддержкой разорванных пробелами чисел и починки homoglyphs
+     * («1 0.79K» -> 10790, «95% (11С.5%)» -> 110.5, «1051 .0%» -> 1051.0, «+21 3%» -> 213).
+     */
+    public static double extractFirstNumber(String s) {
+        List<Double> vals = extractAllNumbers(s);
+        return vals.isEmpty() ? 0.0 : vals.get(vals.size() - 1);
+    }
+
+    /** Извлекает средний урон из диапазона вида «5879 - 10.79K» или одиночного числа */
+    public static double extractRangeAverage(String s) {
+        List<Double> vals = extractAllNumbers(s);
         if (vals.size() >= 2) {
             return 0.5 * (vals.get(vals.size() - 2) + vals.get(vals.size() - 1));
         }
@@ -448,13 +496,17 @@ public class DruidKnowledgeBase {
         }
 
         sb.append("📊 ЖИВОЙ МАТЕМАТИЧЕСКИЙ АУДИТ ПЕРСОНАЖА\n");
-        sb.append("Распознано параметров: ").append(p.scannedStatsCount);
+        sb.append("Собрано в профиле: ").append(p.scannedStatsCount).append(" из 31 стат.");
         if (p.charLevel > 1) sb.append(" · Ур. ").append(p.charLevel);
         if (p.gearScore > 0) sb.append(" · GS ").append(p.gearScore);
-        sb.append("\n\n");
+        sb.append("\n");
+        if (p.scannedStatsCount < 28) {
+            sb.append("💡 В окне «Характеристики персонажа» 31 строка со скроллом (на 1 экран помещается ~17): пролистни список статов вниз и нажми 🔍 СКАН ещё раз — нижние строки автоматически добавятся в профиль!\n");
+        }
+        sb.append("\n");
 
-        // 1. Динамическая диагностика защитных капов (95.0% Уклонение и 95.0% Снижение урона)
-        sb.append("🛡️ 1. СОСТОЯНИЕ ЗАЩИТНЫХ КАПОВ И ПОРОГОВ:\n");
+        // 1. Динамическая диагностика капов и порогов (95% Уклонение, 95% Снижение урона, 100% Шанс крита, 1500% Крит. урон)
+        sb.append("🛡️ 1. СОСТОЯНИЕ КАПОВ И ПОРОГОВ:\n");
         if (p.wastedDodgePct() > 0.1) {
             sb.append(String.format(Locale.US,
                     "  • ⚠️ Оверкап Уклонения: %.1f%% при капе класса 95.0%% (лишние +%.1f%% дают 0%% выживаемости — этот бюджет выгодно перевести в атакующие статы).\n",
@@ -467,11 +519,31 @@ public class DruidKnowledgeBase {
 
         if (p.damageReductionRaw >= 95.0) {
             sb.append(String.format(Locale.US,
-                    "  • ✅ Снижение урона: %.1f%% / 95.0%% (кап закрыт!).\n\n", p.damageReductionRaw));
+                    "  • ✅ Снижение урона: %.1f%% / 95.0%% (кап закрыт!).\n", p.damageReductionRaw));
         } else {
             sb.append(String.format(Locale.US,
-                    "  • Снижение урона: %.1f%% / 95.0%% (до капа ещё %.1f%% — на шлеме, броне и факеле оно сейчас очень ценно).\n\n",
+                    "  • Снижение урона: %.1f%% / 95.0%% (до капа ещё %.1f%% — на шлеме, броне и факеле оно сейчас очень ценно).\n",
                     p.damageReductionRaw, 95.0 - p.damageReductionRaw));
+        }
+
+        if (p.critChance >= 100.0) {
+            sb.append(String.format(Locale.US,
+                    "  • ⚠️ Оверкап Шанса крита: %.1f%% при пороге 100.0%% (все удары уже критуют — аффикс «Шанс крита» на вещах и камнях даёт +0%% урона!).\n",
+                    p.critChance));
+        } else {
+            sb.append(String.format(Locale.US,
+                    "  • Шанс крита: %.1f%% / 100.0%% (до 100%% крита не хватает %.1f%%).\n",
+                    p.critChance, 100.0 - p.critChance));
+        }
+
+        if (p.critDamage >= 1500.0) {
+            sb.append(String.format(Locale.US,
+                    "  • ⚠️ Порог Крит. урона пройден: %.0f%% >= 1500%% (сильное затухание — на вещах гораздо выгоднее Интеллект, Ловкость, Двойной удар и Двойной урон!).\n\n",
+                    p.critDamage));
+        } else {
+            sb.append(String.format(Locale.US,
+                    "  • Крит. урон: %.0f%% / 1500%% (до порога насыщения ещё %.0f%%).\n\n",
+                    p.critDamage, 1500.0 - p.critDamage));
         }
 
         // 2. Живой расчёт предельной ценности каждого атакующего параметра для ТЕКУЩИХ чисел игрока!
@@ -486,17 +558,20 @@ public class DruidKnowledgeBase {
                 String.format(Locale.US, "+10%% Шанса двойного урона (сейчас %.1f%%)", p.doubleDamageChance),
                 relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.DOUBLE_DAMAGE, 10.0)));
         sensitivities.add(new StatSensitivityRow(
-                String.format(Locale.US, "+10%% Шанса крита (сейчас %.1f%%)", p.critChance),
-                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.CRIT_CHANCE, 10.0)));
+                String.format(Locale.US, "+50 Интеллекта (сейчас %.0f)", p.intelligence),
+                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.INTELLIGENCE, 50.0)));
         sensitivities.add(new StatSensitivityRow(
-                String.format(Locale.US, "+10%% Крит. урона (сейчас %.1f%%)", p.critDamage),
-                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.CRIT_DAMAGE, 10.0)));
+                String.format(Locale.US, "+50 Ловкости (сейчас %.0f)", p.agility),
+                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.DEXTERITY, 50.0)));
         sensitivities.add(new StatSensitivityRow(
                 String.format(Locale.US, "+10%% Урона питомца (сейчас +%.0f%%)", p.petDamageBonusPct),
                 relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.PET_DAMAGE, 10.0)));
         sensitivities.add(new StatSensitivityRow(
-                String.format(Locale.US, "+50 Интеллекта (сейчас %.0f)", p.intelligence),
-                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.INTELLIGENCE, 50.0)));
+                String.format(Locale.US, "+10%% Крит. урона (сейчас %.0f%%)", p.critDamage),
+                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.CRIT_DAMAGE, 10.0)));
+        sensitivities.add(new StatSensitivityRow(
+                String.format(Locale.US, "+10%% Шанса крита (сейчас %.1f%%)", p.critChance),
+                relDpsGain(hs, p.mode, baseDps, AffixPositionOptimizer.AffixType.CRIT_CHANCE, 10.0)));
 
         Collections.sort(sensitivities, new Comparator<StatSensitivityRow>() {
             @Override
@@ -512,13 +587,27 @@ public class DruidKnowledgeBase {
                     i + 1, row.label, row.dpsGainPct));
         }
 
-        sb.append("\n📋 3. СЧИТАННЫЕ ОСНОВНЫЕ ПАРАМЕТРЫ:\n");
+        sb.append("\n📋 3. СЧИТАННЫЕ ПАРАМЕТРЫ ПРОФИЛЯ:\n");
         sb.append(String.format(Locale.US, "  • Сила %.0f · Ловкость %.0f · Интеллект %.0f\n",
                 p.strength, p.agility, p.intelligence));
         double avgAtk = (p.minAtk > 0 && p.maxAtk > 0) ? 0.5 * (p.minAtk + p.maxAtk) : p.maxAtk;
         if (p.maxHp > 0 || avgAtk > 0 || p.defense > 0) {
-            sb.append(String.format(Locale.US, "  • HP: %.0f · Ср. база атаки: %.0f · Защита: %.0f\n",
-                    p.maxHp, avgAtk, p.defense));
+            sb.append(String.format(Locale.US, "  • HP: %.0f · Ср. база атаки: %.0f · Защита: %.0f · Блок: %.0f%%\n",
+                    p.maxHp, avgAtk, p.defense, p.blockChance));
+        }
+        sb.append(String.format(Locale.US, "  • Дв. удар: %.1f%% · Дв. урон: %.1f%% · Боссам: +%.0f%%\n",
+                p.doubleHitChance, p.doubleDamageChance, p.bossDamage));
+        if (p.petDamageBonusPct > 0 || p.petDamageMultMillions > 0) {
+            sb.append(String.format(Locale.US, "  • Питомцы: бонус +%.0f%% · множитель %.2fM\n",
+                    p.petDamageBonusPct, p.petDamageMultMillions));
+        }
+        if (p.lifeOnHit > 0 || p.lifeOnKill > 0 || p.lifeStealBonusPct > 0 || p.retaliation > 0) {
+            sb.append(String.format(Locale.US, "  • Сустейн: за удар %.0f · за убийство %.0f · бонус +%.0f%%\n",
+                    p.lifeOnHit, p.lifeOnKill, p.lifeStealBonusPct));
+        }
+        if (p.expBonus > 0 || p.goldBonus > 0 || p.extraKillChance > 0 || p.itemDropPct > 0) {
+            sb.append(String.format(Locale.US, "  • Фарм: опыт +%.1f%% · золото +%.1f%% · доп.убийство %.1f%% · шмот +%.0f%%\n",
+                    p.expBonus, p.goldBonus, p.extraKillChance, p.itemDropPct));
         }
         if (p.bonusAllClassSkills > 0) {
             sb.append(String.format(Locale.US, "  • Бонус ко всем классовым навыкам: +%d\n", p.bonusAllClassSkills));

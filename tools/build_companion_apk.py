@@ -36,9 +36,10 @@ OUT_DIR = ROOT / "releases"
 TOOLS_DIR = Path(os.environ.get("ANDROID_TOOLS_DIR", "/tmp/android-tools"))
 
 DEFAULT_CHANGELOG = (
-    "v2.1.0: Добавлено обновление по воздуху (OTA с проверкой SHA-256) и полный анализатор "
-    "«Гнёзда и Самоцветы» (одновременный скан камней прямо над аффиксами в карточке предмета, "
-    "разбор окон «Обзор гнёзд», «Гнёзда · Слот» и «Кодекс самоцветов» под разные сборки Друида)."
+    "v4.1.0 (Фикс Сумки, Неистовства/Удачи и Боя с Боссом!): "
+    "1) Полностью убрано задвоение предметов инвентаря (строгая дедупликация по ID + точный серверный счётчик рюкзака); "
+    "2) Исправлены все 21 бонуса дропа по серверному конфигу: «Неистовство (Доп. убийство)», «Удача (Шанс повышенного тира)», «Мародёра (Шанс дропа предметов)», «Стихийный всплеск», «Отражение», «Компаньона», «Свирепость» + добавлен быстрый фильтр «Неист./Удача»; "
+    "3) В карточку Откатов и Системных Будильников добавлен «Бой с Боссом» (+ прогресс до вызова босса этажа и таймеры /api/dungeon и /api/guild)!"
 )
 
 
@@ -148,29 +149,42 @@ def build_apk() -> Path:
             str(res_zip),
         ])
 
-        # 3. Компиляция Java -> .class
+        # 3. Компиляция Java -> .class (с заглушкой LambdaMetafactory для -bootclasspath android.jar,
+        #    так как дешугаринг лямбд выполняет D8 на шаге 4)
         java_sources = sorted(str(p) for p in (APP_MAIN / "java").rglob("*.java"))
         java_sources += sorted(str(p) for p in gen_dir.rglob("*.java"))
+        lm_dir = gen_dir / "java" / "lang" / "invoke"
+        lm_dir.mkdir(parents=True, exist_ok=True)
+        (lm_dir / "LambdaMetafactory.java").write_text(
+            "package java.lang.invoke;\n"
+            "public class LambdaMetafactory {\n"
+            "  public static CallSite metafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
+            "      MethodType m1, MethodHandle impl, MethodType m2) { return null; }\n"
+            "  public static CallSite altMetafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
+            "      Object... args) { return null; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        java_sources_with_lm = java_sources + [str(lm_dir / "LambdaMetafactory.java")]
+
         if ecj_jar:
-            lm_dir = gen_dir / "java" / "lang" / "invoke"
-            lm_dir.mkdir(parents=True, exist_ok=True)
-            (lm_dir / "LambdaMetafactory.java").write_text(
-                "package java.lang.invoke;\n"
-                "public class LambdaMetafactory {\n"
-                "  public static CallSite metafactory(MethodHandles.Lookup l, String n, MethodType t,\n"
-                "      MethodType m1, MethodHandle impl, MethodType m2) { return null; }\n"
-                "}\n",
-                encoding="utf-8",
-            )
-            java_sources_ecj = java_sources + [str(lm_dir / "LambdaMetafactory.java")]
             subprocess.check_call([
                 DEFAULT_JAVA, "-jar", ecj_jar,
                 "-8", "-nowarn", "-encoding", "UTF-8",
                 "-bootclasspath", android_jar,
                 "-d", str(cls_dir),
-                *java_sources_ecj,
+                *java_sources_with_lm,
             ])
-            shutil.rmtree(cls_dir / "java", ignore_errors=True)
+        elif (TOOLS_DIR / "tools.jar").exists():
+            subprocess.check_call([
+                DEFAULT_JAVA, "-cp", str(TOOLS_DIR / "tools.jar"),
+                "com.sun.tools.javac.Main",
+                "-source", "8", "-target", "8",
+                "-encoding", "UTF-8",
+                "-bootclasspath", android_jar,
+                "-d", str(cls_dir),
+                *java_sources_with_lm,
+            ])
         else:
             subprocess.check_call([
                 DEFAULT_JAVAC,
@@ -178,8 +192,9 @@ def build_apk() -> Path:
                 "-encoding", "UTF-8",
                 "-bootclasspath", android_jar,
                 "-d", str(cls_dir),
-                *java_sources,
+                *java_sources_with_lm,
             ])
+        shutil.rmtree(cls_dir / "java", ignore_errors=True)
 
         # 4. Сборка classes.dex через D8
         class_files = sorted(str(p) for p in cls_dir.rglob("*.class"))
@@ -220,7 +235,8 @@ def build_apk() -> Path:
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        apk_filename = f"IdleArc-DruidHelper-v{ver_name}.apk"
+        apk_filename = f"IdleArcHelper-v{ver_name}.apk"
+        legacy_ota_filename = f"IdleArc-DruidHelper-v{ver_name}.apk"
         final_apk = OUT_DIR / apk_filename
         subprocess.check_call([
             DEFAULT_JAVA, "-jar", apksigner_jar, "sign",
@@ -235,6 +251,8 @@ def build_apk() -> Path:
             "--out", str(final_apk),
             str(aligned_apk),
         ])
+        # Сохраняем зеркальную копию с прежним префиксом, чтобы клиенты v3.1.0 обновились по воздуху в 1 клик
+        shutil.copy2(final_apk, OUT_DIR / legacy_ota_filename)
 
         verify_out = subprocess.check_output([
             DEFAULT_JAVA, "-jar", apksigner_jar, "verify", "--verbose", str(final_apk)
@@ -247,9 +265,9 @@ def build_apk() -> Path:
         repo_slug = os.environ.get("GITHUB_REPOSITORY", "AlfaGideon/IdleArc2.0")
         ota_apk_url = os.environ.get(
             "OTA_APK_URL",
-            f"https://github.com/{repo_slug}/raw/arena/d18004e6-idlearc2-0/releases/{apk_filename}",
+            f"https://raw.githubusercontent.com/{repo_slug}/v{ver_name}/releases/{apk_filename}",
         )
-        changelog = os.environ.get("OTA_CHANGELOG", DEFAULT_CHANGELOG)
+        changelog = os.environ.get("OTA_CHANGELOG") or DEFAULT_CHANGELOG
         manifest_payload = {
             "versionCode": ver_code,
             "versionName": ver_name,

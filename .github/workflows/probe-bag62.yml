@@ -1,0 +1,20 @@
+name: Probe Real Bag 62
+on:
+  push:
+    branches:
+      - "arena/**"
+    paths:
+      - "tools/probe_real_bag62.py"
+      - ".github/workflows/probe-bag62.yml"
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install curl_cffi & run probe
+        env:
+          IDLEARC_EMAIL: ${{ secrets.IDLEARC_EMAIL }}
+          IDLEARC_PASSWORD: ${{ secrets.IDLEARC_PASSWORD }}
+        run: |
+          pip install -q --break-system-packages curl_cffi || pip install -q curl_cffi
+          python3 tools/probe_real_bag62.py

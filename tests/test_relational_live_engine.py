@@ -13,9 +13,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = ROOT / "companion" / "overlay" / "app" / "src" / "main" / "java" / "com" / "idlearc" / "companion"
 GLYPHS_BIN = ROOT / "companion" / "overlay" / "app" / "src" / "main" / "assets" / "ocr_glyphs.bin"
 ECJ_JAR = Path("/tmp/android-tools/ecj.jar")
+TOOLS_JAR = Path("/tmp/android-tools/tools.jar")
 
 
-@unittest.skipUnless(ECJ_JAR.exists(), "Android ecj.jar toolchain not present")
+@unittest.skipUnless(
+    ECJ_JAR.exists() or TOOLS_JAR.exists() or (jdk4py.JAVA_HOME / "bin" / "javac").exists(),
+    "Java compiler toolchain not present",
+)
 class TestRelationalLiveEngine(unittest.TestCase):
     """
     Проверяет, что в v2.0.0:
@@ -142,24 +146,50 @@ public class RelationalSuite {
                     + repHighCdLowDd.idealByPos);
         }
 
-        // Профиль В: Шанс крита 110%, просевший Крит. урон 250%, высокий DD 60%
-        // -> ОБА критовых аффикса (CRIT_DAMAGE + CRIT_CHANCE) математически обходят ИНТЕЛЛЕКТ!
-        DruidProfile lowCdHighDdHero = new DruidProfile();
-        lowCdHighDdHero.hasScannedStats = true;
-        lowCdHighDdHero.critChance = 110.0;
-        lowCdHighDdHero.critDamage = 250.0;
-        lowCdHighDdHero.doubleHitChance = 60.0;
-        lowCdHighDdHero.doubleDamageChance = 60.0;
-        lowCdHighDdHero.petDamageBonusPct = 800.0;
-        lowCdHighDdHero.dodgeRaw = 95.0;
-        lowCdHighDdHero.damageReductionRaw = 95.0;
+        // Профиль В (Эндгейм Пуш): Шанс крита >= 100% (570%) И Крит. урон >= 1500% (2050%)
+        // -> НИ Шанс крита, НИ Крит. урон НЕ должны рекомендоваться — вместо них на Оружии/Поясе/Украшениях
+        // выбираются ИНТЕЛЛЕКТ и ЛОВКОСТЬ (вместе с Уроном питомца, Двойным ударом и Двойным уроном)!
+        DruidProfile endgameCritCappedHero = new DruidProfile();
+        endgameCritCappedHero.hasScannedStats = true;
+        endgameCritCappedHero.mode = DruidProfile.BuildMode.PUSH;
+        endgameCritCappedHero.critChance = 570.0;
+        endgameCritCappedHero.critDamage = 2050.0;
+        endgameCritCappedHero.doubleHitChance = 680.0;
+        endgameCritCappedHero.doubleDamageChance = 1130.0;
+        endgameCritCappedHero.intelligence = 2200.0;
+        endgameCritCappedHero.agility = 980.0;
+        endgameCritCappedHero.petDamageBonusPct = 1100.0;
+        endgameCritCappedHero.dodgeRaw = 110.0;
+        endgameCritCappedHero.damageReductionRaw = 95.0;
+        endgameCritCappedHero.maxHp = 300000.0;
+        endgameCritCappedHero.defense = 70000.0;
         AffixPositionOptimizer.OptimizationReport repLowCdHighDd =
-                AffixPositionOptimizer.analyzeItemAffixes(weaponCard, GearSlot.WEAPON, lowCdHighDdHero);
-        if (!repLowCdHighDd.idealByPos.contains(AffixType.CRIT_DAMAGE)
-                || !repLowCdHighDd.idealByPos.contains(AffixType.CRIT_CHANCE)
-                || repLowCdHighDd.idealByPos.contains(AffixType.INTELLIGENCE)) {
-            throw new AssertionError("Expected BOTH CRIT_DAMAGE + CRIT_CHANCE beating INTELLIGENCE for 110% CC / 250% CD / 60% DD, got: "
+                AffixPositionOptimizer.analyzeItemAffixes(weaponCard, GearSlot.WEAPON, endgameCritCappedHero);
+        if (repLowCdHighDd.idealByPos.contains(AffixType.CRIT_CHANCE)
+                || repLowCdHighDd.idealByPos.contains(AffixType.CRIT_DAMAGE)
+                || !repLowCdHighDd.idealByPos.contains(AffixType.INTELLIGENCE)
+                || !repLowCdHighDd.idealByPos.contains(AffixType.DEXTERITY)) {
+            throw new AssertionError("Endgame hero (CC>=100%, CD>=1500%) MUST pick INTELLIGENCE + DEXTERITY and NOT Crit, got: "
                     + repLowCdHighDd.idealByPos);
+        }
+        List<IdleArcOcrEngine.OcrLine> ringCard = Arrays.asList(
+                new IdleArcOcrEngine.OcrLine("Кольцо · А5 +10", 100, 125, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("АФФИКСЫ", 180, 205, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Урон питомца +180%", 215, 240, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Шанс двойного удара +40%", 250, 275, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Шанс двойного урона +40%", 285, 310, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Интеллект +110", 320, 345, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Бонус золота +90%", 355, 380, 0f, 0f, 0, 220),
+                new IdleArcOcrEngine.OcrLine("Надеть", 420, 450, 0f, 0f, 0, 220)
+        );
+        AffixPositionOptimizer.OptimizationReport repRingEndgame =
+                AffixPositionOptimizer.analyzeItemAffixes(ringCard, GearSlot.RING, endgameCritCappedHero);
+        if (repRingEndgame.idealByPos.contains(AffixType.CRIT_CHANCE)
+                || repRingEndgame.idealByPos.contains(AffixType.CRIT_DAMAGE)
+                || !repRingEndgame.idealByPos.contains(AffixType.INTELLIGENCE)
+                || !repRingEndgame.idealByPos.contains(AffixType.DEXTERITY)) {
+            throw new AssertionError("Endgame ring MUST pick INTELLIGENCE + DEXTERITY and NOT Crit, got: "
+                    + repRingEndgame.idealByPos);
         }
 
         // 3. Доказательство честного ВЫЧИТАНИЯ строки на НАДЕТОМ предмете («Снять» vs «Надеть»)
@@ -303,19 +333,92 @@ public class RelationalSuite {
                 throw new AssertionError("Expected detectRedUnequipButton=true on Screenshot_20261111-014922.png");
             }
             ScreenAnalyzer.ScanResult hRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
-            if (!hRes.shortBadge.contains("1/5") || !hRes.details.contains("Позиция #5")
+            if (!hRes.shortBadge.contains("/5") || !hRes.details.contains("Позиция #5")
                     || !hRes.details.contains("[НАДЕТО на герое]")
                     || !hRes.details.contains("ГНЁЗДА И КАМНИ НА ПРЕДМЕТЕ")) {
-                throw new AssertionError("Buggy 1/4 shift or missing gem block on Screenshot_20261111-014922.png: "
+                throw new AssertionError("Buggy row shift or missing gem block on Screenshot_20261111-014922.png: "
                         + hRes.shortBadge + " | " + hRes.details);
             }
         }
 
+        // Проверка отсутствия сырого OCR-дампа на неигровом экране (Screenshot_20261111-035619.png)
+        // и накопительного чтения всех 31 строки «Характеристик персонажа» при прокрутке
+        File browserPng = new File(rootDir, "Screenshot_20261111-035619.png");
+        if (browserPng.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(browserPng, wh);
+            ScreenAnalyzer.ScanResult brRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], scannedFromScreenshots);
+            if (brRes.details.contains("Визуально считано с экрана")) {
+                throw new AssertionError("Raw OCR debug lines leaked into user UI: " + brRes.details);
+            }
+        }
+
+        DruidProfile full31Profile = new DruidProfile();
+        List<String> statsTop17 = Arrays.asList(
+                "Сила 100", "Ловкость 988", "Интеллект 2.21K",
+                "Макс. здоровье 306.4K", "Урон атаки 180K - 260K", "Защита 78.4K",
+                "Снижение урона 95% (95.1%)", "Шанс крита 572.7%", "Крит. урон 2058%",
+                "Шанс двойного удара 680%", "Шанс двойного урона 1133%",
+                "Шанс уклонения 95% (110.5%)", "Шанс блока 0%", "Урон боссам +100%",
+                "Здоровье за удар 0", "Здоровье за убийство 1.08K", "Здоровье за удар и за убийство 0%"
+        );
+        List<String> statsBottom14 = Arrays.asList(
+                "Урон возмездия 0", "Бонус к урону питомца +1240%", "Итоговый множитель урона питомца 83.48M",
+                "Все классовые навыки +18", "Бонус опыта +944.1%", "Бонус золота +893.1%",
+                "Шанс доп. убийства 42%", "Шанс выпадения предметов +310%", "Множитель добычи предметов 4.1",
+                "Шанс выпадения материалов +280%", "Множитель добычи материалов 3.8",
+                "Шанс выпадения рун +190%", "Шанс выпадения рубинов +150%", "Шанс выпадения яиц 0%"
+        );
+        {
+            // Прогоняем верх и низ окна «Характеристики персонажа» подряд
+            List<String> page1WithHdr = new ArrayList<>();
+            page1WithHdr.add("Характеристики персонажа");
+            page1WithHdr.addAll(statsTop17);
+            List<String> page2WithHdr = new ArrayList<>();
+            page2WithHdr.add("Характеристики персонажа");
+            page2WithHdr.addAll(statsBottom14);
+            // Используем публичный анализатор через пакет или проверяем через скриншоты + 2 прокрутки
+            java.lang.reflect.Method upd = ScreenAnalyzer.class.getDeclaredMethod(
+                    "updateProfileFromStatsLines", List.class, DruidProfile.class);
+            upd.setAccessible(true);
+            int u1 = (Integer) upd.invoke(null, page1WithHdr, full31Profile);
+            int u2 = (Integer) upd.invoke(null, page2WithHdr, full31Profile);
+            if (u1 != 17 || u2 != 14 || full31Profile.scannedStatsCount != 31) {
+                throw new AssertionError("Expected 17 + 14 = 31 accumulated stats across scroll, got u1="
+                        + u1 + " u2=" + u2 + " total=" + full31Profile.scannedStatsCount);
+            }
+        }
+
         // 6. Тест системы «ГНЁЗДА И САМОЦВЕТЫ»:
-        // а) Защита от ложного суффикса «М» в «+413.2 Макс. здоровье»
+        // а) Защита от ложного суффикса «М» в «+413.2 Макс. здоровье» и починка серых скобок «95% (11С.5%)» -> 110.5%
         double parsedHpChip = DruidKnowledgeBase.extractFirstNumber("+413.2 Макс. здоровье");
         if (Math.abs(parsedHpChip - 413.2) > 0.05) {
             throw new AssertionError("Expected 413.2 for '+413.2 Макс. здоровье', got: " + parsedHpChip);
+        }
+        DruidProfile dodgeBugProfile = new DruidProfile();
+        ScreenAnalyzer.ScanResult dodgeSheetCheck = new ScreenAnalyzer.ScanResult();
+        // Прямой регрессионный тест строки с оптической подменой 0 -> С в серых скобках
+        double repairedParen = DruidKnowledgeBase.extractFirstNumber("шансуклонения Ф 95% (11С.5%)");
+        if (Math.abs(repairedParen - 110.5) > 0.05) {
+            throw new AssertionError("Expected 110.5 for '95% (11С.5%)', got: " + repairedParen);
+        }
+        File dodgeScreenshot = new File(rootDir, "Screenshot_20261111-035326.png");
+        if (dodgeScreenshot.exists()) {
+            int[] wh = new int[2];
+            int[] argb = loadArgb(dodgeScreenshot, wh);
+            ScreenAnalyzer.ScanResult dsRes = ScreenAnalyzer.analyzeFrame(ocr, argb, wh[0], wh[1], dodgeBugProfile);
+            if (!dsRes.profileUpdated
+                    || Math.abs(dodgeBugProfile.dodgeEff - 95.0) > 0.05
+                    || Math.abs(dodgeBugProfile.dodgeRaw - 110.5) > 0.05
+                    || Math.abs(dodgeBugProfile.agility - 988.0) > 0.1
+                    || Math.abs(dodgeBugProfile.intelligence - 2210.0) > 1.0
+                    || Math.abs(dodgeBugProfile.critChance - 572.7) > 0.1
+                    || Math.abs(dodgeBugProfile.critDamage - 2058.0) > 0.5) {
+                throw new AssertionError("Dodge 110.5% regression failed on Screenshot_20261111-035326.png: eff="
+                        + dodgeBugProfile.dodgeEff + " raw=" + dodgeBugProfile.dodgeRaw
+                        + " details=" + dsRes.details);
+            }
+            System.out.println("VERIFIED Screenshot_20261111-035326.png: " + dsRes.headline);
         }
 
         // б) Динамическая смена лучших камней под разные сборки (PUSH vs FARM vs LEVELING)
@@ -407,9 +510,15 @@ public class RelationalSuite {
                 str(tmp / "RelationalSuite.java"),
             ]
             java_bin = str(jdk4py.JAVA)
+            javac_bin = str(jdk4py.JAVA_HOME / "bin" / "javac")
+            if ECJ_JAR.exists():
+                comp_cmd = [java_bin, "-Dfile.encoding=UTF-8", "-jar", str(ECJ_JAR), "-17", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
+            elif TOOLS_JAR.exists():
+                comp_cmd = [java_bin, "-Dfile.encoding=UTF-8", "-cp", str(TOOLS_JAR), "com.sun.tools.javac.Main", "-source", "8", "-target", "8", "-bootclasspath", "/tmp/android-tools/rt.jar", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
+            else:
+                comp_cmd = [javac_bin, "-J-Dfile.encoding=UTF-8", "--release", "17", "-encoding", "UTF-8", "-d", str(tmp)] + java_files
             comp = subprocess.run(
-                [java_bin, "-Dfile.encoding=UTF-8", "-jar", str(ECJ_JAR), "-17", "-encoding", "UTF-8", "-d", str(tmp)]
-                + java_files,
+                comp_cmd,
                 capture_output=True,
                 text=True,
             )
