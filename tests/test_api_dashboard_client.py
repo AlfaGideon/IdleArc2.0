@@ -92,14 +92,19 @@ public class ApiClientSuite {
         static volatile java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         static volatile java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         static final java.util.List<String> paths = java.util.Collections.synchronizedList(new java.util.ArrayList<String>());
+        static final java.util.Map<String,String> bodies = new java.util.HashMap<String,String>();
+        static final java.util.Map<String,Integer> codes = new java.util.HashMap<String,Integer>();
         FakeConnection(java.net.URL url) { super(url); paths.add(url.getPath()); }
         public void connect() {} public void disconnect() {} public boolean usingProxy() { return false; }
-        public int getResponseCode() { return 200; }
+        public int getResponseCode() { Integer code=codes.get(url.getPath()); return code == null ? 200 : code; }
+        public java.io.InputStream getErrorStream() { return new java.io.ByteArrayInputStream(new byte[0]); }
         public java.io.InputStream getInputStream() throws java.io.IOException {
             entered.countDown();
             try { if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new java.io.IOException("blocked"); }
             catch (InterruptedException e) { throw new java.io.IOException(e); }
-            return new java.io.ByteArrayInputStream("{\\"characterId\\":1,\\"level\\":10}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String body = bodies.get(url.getPath());
+            if (body == null) body = "{\\"characterId\\":1,\\"level\\":10}";
+            return new java.io.ByteArrayInputStream(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
     }
 
@@ -512,6 +517,28 @@ public class ApiClientSuite {
         BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(dash, fakeGems, p);
         check(petAdv.gemSynergyNotes.get(0).contains("КАП ДОП. УБИЙСТВА ЗАКРЫТ"), "Detects extra kill >= 100% cap on pets");
 
+        InventoryPageLoader.Result strictBag = InventoryPageLoader.loadStrict(new InventoryPageLoader.Fetcher() {
+            public String get(String path) throws Exception {
+                if (path.equals("/api/inventory")) return inventoryPage(1, 11, "page");
+                if (path.equals("/api/items-page/2")) return "{\\"current_page\\":2,\\"data\\":[{\\"id\\":11}]}";
+                throw new Exception("unexpected path");
+            }
+        });
+        check(strictBag.items.size() == 11 && strictBag.pages.size() == 2, "live bag loads all pages");
+        boolean strictFailed = false;
+        try { InventoryPageLoader.loadStrict(new InventoryPageLoader.Fetcher() {
+            public String get(String path) throws Exception {
+                if (path.equals("/api/inventory")) return inventoryPage(1, 11, "page");
+                throw new Exception("HTTP 429");
+            }
+        }); } catch (Exception e) { strictFailed = e.getMessage().contains("429"); }
+        check(strictFailed, "partial bag failure propagates instead of replacing cached bag");
+        boolean invalidBag = false;
+        try { InventoryPageLoader.loadStrict(new InventoryPageLoader.Fetcher() {
+            public String get(String path) { return "{\\"invalid\\":true}"; }
+        }); } catch (Exception e) { invalidBag = true; }
+        check(invalidBag, "invalid first bag page rejected");
+
         check(LivePollPolicy.failureDelayMs(1, false) == 5000 && LivePollPolicy.failureDelayMs(5, false) == 60000
                 && LivePollPolicy.failureDelayMs(1, true) == 60000, "live error and rate-limit backoff");
         java.net.URL.setURLStreamHandlerFactory(protocol -> "https".equals(protocol) ? new java.net.URLStreamHandler() {
@@ -552,6 +579,56 @@ public class ApiClientSuite {
         check(loggedOutLive.await(5, java.util.concurrent.TimeUnit.SECONDS) && cancelled[0] != null && IdleArcApiClient.getCachedDashboard() == null,
                 "logout invalidates in-flight live response");
 
+        // End-to-end live section refresh through a fake HTTP transport.
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        IdleArcApiClient.saveCredentials(liveCtx, "x", "", "synthetic-token");
+        FakeConnection.release = new java.util.concurrent.CountDownLatch(0);
+        java.util.concurrent.CountDownLatch prepared = new java.util.concurrent.CountDownLatch(1);
+        IdleArcApiClient.syncDashboardAsync(liveCtx, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { prepared.countDown(); }
+            public void onError(String err) { throw new RuntimeException(err); }
+        });
+        check(prepared.await(5, java.util.concurrent.TimeUnit.SECONDS), "dashboard associates account before section refresh");
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        FakeConnection.paths.clear();
+        FakeConnection.bodies.put("/api/inventory", inventoryPage(1, 11, "page"));
+        FakeConnection.bodies.put("/api/items-page/2", "{\\"current_page\\":2,\\"data\\":[{\\"id\\":11}]}");
+        final boolean[] interested = {true};
+        IdleArcApiClient.LiveResourceInterest interest = new IdleArcApiClient.LiveResourceInterest() {
+            public boolean isInterested(int resource) { return interested[0]; }
+        };
+        java.util.concurrent.CountDownLatch bagDone = new java.util.concurrent.CountDownLatch(1);
+        final String[] bagError = {null};
+        IdleArcApiClient.syncLiveSectionAsync(liveCtx, LiveSections.INVENTORY, interest, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { bagDone.countDown(); }
+            public void onError(String err) { bagError[0]=err; bagDone.countDown(); }
+        });
+        check(bagDone.await(5, java.util.concurrent.TimeUnit.SECONDS) && bagError[0]==null, "live inventory succeeds");
+        check(FakeConnection.paths.equals(java.util.Arrays.asList("/api/inventory", "/api/items-page/2"))
+                && IdleArcApiClient.getCachedInventoryItems().size()==11, "only inventory pages fetched and complete bag committed");
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        FakeConnection.codes.put("/api/items-page/2", 429);
+        java.util.concurrent.CountDownLatch failedBag = new java.util.concurrent.CountDownLatch(1);
+        final String[] failedReason={null};
+        IdleArcApiClient.syncLiveSectionAsync(liveCtx, LiveSections.INVENTORY, interest, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { failedBag.countDown(); }
+            public void onError(String err) { failedReason[0]=err; failedBag.countDown(); }
+        });
+        check(failedBag.await(5, java.util.concurrent.TimeUnit.SECONDS) && failedReason[0]!=null && failedReason[0].contains("429")
+                && IdleArcApiClient.getCachedInventoryItems().size()==11, "rate limit retains previous complete bag");
+        FakeConnection.codes.clear();
+        for (int i = 0; i < 50; i++) { Thread.sleep(10); if (!IdleArcApiClient.isSyncBusy()) break; }
+        interested[0]=false;
+        FakeConnection.paths.clear();
+        java.util.concurrent.CountDownLatch notVisible = new java.util.concurrent.CountDownLatch(1);
+        final String[] notVisibleReason={null};
+        IdleArcApiClient.syncLiveSectionAsync(liveCtx, LiveSections.INVENTORY, interest, new IdleArcApiClient.ApiCallback() {
+            public void onSuccess(ScreenAnalyzer.ScanResult ignored) { notVisible.countDown(); }
+            public void onError(String err) { notVisibleReason[0]=err; notVisible.countDown(); }
+        });
+        check(notVisible.await(5, java.util.concurrent.TimeUnit.SECONDS) && IdleArcApiClient.LIVE_CANCELLED.equals(notVisibleReason[0])
+                && FakeConnection.paths.isEmpty(), "hidden bag starts no requests");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -565,6 +642,7 @@ public class ApiClientSuite {
                 str(SRC_DIR / "SimpleJson.java"),
                 str(SRC_DIR / "HarmonyInfo.java"),
                 str(SRC_DIR / "LivePollPolicy.java"),
+                str(SRC_DIR / "LiveSections.java"),
                 str(SRC_DIR / "DruidProfile.java"),
                 str(SRC_DIR / "LiveBuildSimulator.java"),
                 str(SRC_DIR / "IdleArcOcrEngine.java"),

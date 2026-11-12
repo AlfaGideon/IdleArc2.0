@@ -197,11 +197,12 @@ public class OverlayService extends Service {
                 profile = DruidProfile.load(OverlayService.this);
                 bubbleView.setVisibility(View.GONE);
                 cardView.setVisibility(View.VISIBLE);
+                if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, activeTab);
                 wm.updateViewLayout(rootContainer, winParams);
                 refreshPanelContent();
                 if (IdleArcApiClient.hasSavedCredentials(OverlayService.this)) {
                     long ageMs = System.currentTimeMillis() - IdleArcApiClient.getLastSyncTimeMs();
-                    if (ageMs > 20_000L) {
+                    if (autoSyncSec != 1 && ageMs > 20_000L) {
                         triggerApiSync(false);
                     }
                 }
@@ -273,6 +274,7 @@ public class OverlayService extends Service {
             @Override
             public void onClick(View v) {
                 cardView.setVisibility(View.GONE);
+                if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, -1);
                 bubbleView.setVisibility(View.VISIBLE);
                 wm.updateViewLayout(rootContainer, winParams);
             }
@@ -316,6 +318,7 @@ public class OverlayService extends Service {
                 @Override
                 public void onClick(View v) {
                     activeTab = tIdx;
+                    if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, activeTab);
                     refreshPanelContent();
                 }
             });
@@ -376,8 +379,8 @@ public class OverlayService extends Service {
             } else {
                 autoSyncBtn.setText("● LIVE");
                 styleMini(autoSyncBtn, "#1B4332", "#69F0AE", true);
-                LiveSyncManager.get().add(this, this, liveListener);
-                Toast.makeText(this, "LIVE: dashboard примерно раз в секунду, пока виджет работает. Остальные данные обновляются кнопкой API.", Toast.LENGTH_LONG).show();
+                LiveSyncManager.get().add(this, this, liveListener, activeTab);
+                Toast.makeText(this, "LIVE обновляет только открытую вкладку. При сворачивании опрос приостанавливается.", Toast.LENGTH_LONG).show();
                 return;
             }
         }

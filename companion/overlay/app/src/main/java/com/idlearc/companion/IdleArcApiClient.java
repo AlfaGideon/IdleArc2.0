@@ -45,8 +45,10 @@ public class IdleArcApiClient {
     public static final String SYNC_BUSY_MESSAGE = "SYNC_BUSY";
     private static volatile long lastLivePersistMs = 0L;
     private static long authGeneration = 0L;
+    private static long dashboardAuthGeneration = -1L;
 
     public static boolean isSyncBusy() { return SYNC_BUSY.get(); }
+    public static synchronized long getCredentialGeneration() { return authGeneration; }
 
     public interface ApiCallback {
         void onSuccess(ScreenAnalyzer.ScanResult scanResult);
@@ -84,6 +86,7 @@ public class IdleArcApiClient {
 
     public static synchronized void clearCredentials(Context ctx) {
         authGeneration++;
+        dashboardAuthGeneration = -1L;
         cachedDashboard = null;
         cachedInventoryItems = new ArrayList<>();
         cachedInventoryTotalCount = 0;
@@ -233,6 +236,8 @@ public class IdleArcApiClient {
             public void run() {
                 try {
                     SharedPreferences sp = ctx != null ? ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE) : null;
+                    final long syncGeneration;
+                    synchronized (IdleArcApiClient.class) { syncGeneration = authGeneration; }
                     String token = sp != null ? sp.getString("bearer_token", "") : "";
                     String email = sp != null ? sp.getString("email", "") : "";
                     String password = sp != null ? sp.getString("password", "") : "";
@@ -269,9 +274,14 @@ public class IdleArcApiClient {
                         if (cb != null) cb.onError("Сервер вернул пустой ответ /api/dashboard.");
                         return;
                     }
-                    Map<String, Object> prevDash = cachedDashboard;
-                    cachedDashboard = dash;
-                    lastSyncTimeMs = System.currentTimeMillis();
+                    Map<String, Object> prevDash;
+                    synchronized (IdleArcApiClient.class) {
+                        if (syncGeneration != authGeneration) throw new Exception("Нет учётных данных API");
+                        prevDash = cachedDashboard;
+                        cachedDashboard = dash;
+                        dashboardAuthGeneration = syncGeneration;
+                        lastSyncTimeMs = System.currentTimeMillis();
+                    }
                     applyDashboardToProfile(dash, profile);
                     SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash, lastSyncTimeMs);
                     CatalystTracker.recordSync(ctx, dash, lastSyncTimeMs);
@@ -425,6 +435,7 @@ public class IdleArcApiClient {
                         long time = System.currentTimeMillis();
                         Map<String, Object> prev = cachedDashboard;
                         cachedDashboard = dash;
+                        dashboardAuthGeneration = generation;
                         lastSyncTimeMs = time;
                         boolean persist = time - lastLivePersistMs >= 15_000L || time < lastLivePersistMs;
                         SnapshotHistoryTracker.onNewDashboardSynced(ctx, prev, dash, time, persist);
@@ -443,6 +454,111 @@ public class IdleArcApiClient {
                 }
             }
         }, "IdleArcLiveDashboard").start();
+    }
+
+    public interface LiveResourceInterest { boolean isInterested(int resource); }
+    public static final String LIVE_CANCELLED = "LIVE_CANCELLED";
+    public static final String LIVE_NEEDS_DASHBOARD = "LIVE_NEEDS_DASHBOARD";
+
+    /** One visible section only. Multi-page inventories are committed only after a complete load. */
+    public static void syncLiveSectionAsync(final Context ctx, final int resource,
+                                             final LiveResourceInterest interest, final ApiCallback cb) {
+        if (!SYNC_BUSY.compareAndSet(false, true)) {
+            if (cb != null) cb.onError(SYNC_BUSY_MESSAGE);
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (ctx == null || interest == null) throw new Exception(LIVE_CANCELLED);
+                    final long generation;
+                    final String characterBefore;
+                    synchronized (IdleArcApiClient.class) {
+                        generation = authGeneration;
+                        characterBefore = SimpleJson.str(cachedDashboard, "characterId", "");
+                        if (dashboardAuthGeneration != generation || characterBefore.isEmpty()) throw new Exception(LIVE_NEEDS_DASHBOARD);
+                    }
+                    if (!interest.isInterested(resource)) throw new Exception(LIVE_CANCELLED);
+                    InventoryPageLoader.Result inventory = null;
+                    Map<String, Object> parsed = null;
+                    String json = null;
+                    if (resource == LiveSections.INVENTORY) {
+                        inventory = InventoryPageLoader.loadStrict(new InventoryPageLoader.Fetcher() {
+                            private boolean first = true;
+                            @Override public String get(String path) throws Exception {
+                                if (!first) Thread.sleep(350L);
+                                first = false;
+                                if (!interest.isInterested(resource)) throw new Exception(LIVE_CANCELLED);
+                                return fetchLiveResource(ctx, path, generation);
+                            }
+                        });
+                    } else {
+                        json = fetchLiveResource(ctx, LiveSections.path(resource), generation);
+                        parsed = SimpleJson.parseObject(json);
+                        if (parsed == null || parsed.isEmpty()) throw new Exception("Пустой ответ " + LiveSections.label(resource));
+                        if (resource == LiveSections.BOSS && !parsed.containsKey("can_fight"))
+                            throw new Exception("Неизвестный статус босса");
+                    }
+                    synchronized (IdleArcApiClient.class) {
+                        if (generation != authGeneration || dashboardAuthGeneration != generation
+                                || !interest.isInterested(resource)) throw new Exception(LIVE_CANCELLED);
+                        String characterAfter = SimpleJson.str(cachedDashboard, "characterId", "");
+                        if (!characterBefore.equals(characterAfter)) throw new Exception(LIVE_CANCELLED);
+                        SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+                        SharedPreferences.Editor ed = cp.edit();
+                        boolean changed = false;
+                        if (resource == LiveSections.INVENTORY) {
+                            cachedInventoryItems = inventory.items;
+                            cachedInventoryTotalCount = inventory.total;
+                            int oldCount = cp.getInt("inv_page_cnt", 0);
+                            if (oldCount != inventory.pages.size() || cp.getInt("inv_total_cnt", -1) != inventory.total) changed = true;
+                            ed.putInt("inv_total_cnt", inventory.total).putInt("inv_page_cnt", inventory.pages.size());
+                            for (int i = 0; i < inventory.pages.size(); i++) {
+                                String key = "inv_page_" + (i + 1), page = inventory.pages.get(i);
+                                if (!page.equals(cp.getString(key, ""))) changed = true;
+                                ed.putString(key, page);
+                            }
+                            for (int i = inventory.pages.size() + 1; i <= oldCount && i <= 100; i++) ed.remove("inv_page_" + i);
+                        } else {
+                            String cacheKey;
+                            if (resource == LiveSections.GEMS) { cachedGemsData = parsed; cacheKey = "gems_json"; }
+                            else if (resource == LiveSections.BOSS) {
+                                cachedBossFightStatusTimeMs = System.currentTimeMillis();
+                                cachedBossFightStatus = parsed; cacheKey = "boss_status_json";
+                                ed.putLong("boss_status_ts", cachedBossFightStatusTimeMs); changed = true;
+                            } else if (resource == LiveSections.GUILD) { cachedGuildData = parsed; cacheKey = "guild_json"; }
+                            else throw new Exception("Неизвестный раздел");
+                            if (!json.equals(cp.getString(cacheKey, ""))) changed = true;
+                            ed.putString(cacheKey, json);
+                        }
+                        if (changed) ed.apply();
+                    }
+                    if (cb != null) cb.onSuccess(null);
+                } catch (Exception e) {
+                    if (cb != null) cb.onError(e.getMessage() != null ? e.getMessage() : e.toString());
+                } finally { SYNC_BUSY.set(false); }
+            }
+        }, "IdleArcLiveSection").start();
+    }
+
+    private static String fetchLiveResource(Context ctx, String path, long generation) throws Exception {
+        SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
+        synchronized (IdleArcApiClient.class) {
+            if (generation != authGeneration) throw new Exception(LIVE_CANCELLED);
+        }
+        String token = sp.getString("bearer_token", "");
+        if (token == null || token.isEmpty()) throw new Exception("Нет учётных данных API");
+        try { return fetchAuthenticatedGetJson(token, path); }
+        catch (AuthExpiredException expired) {
+            String email = sp.getString("email", ""), password = sp.getString("password", "");
+            if (email == null || email.isEmpty() || password == null || password.isEmpty()) throw expired;
+            token = loginForBearerToken(email, password);
+            synchronized (IdleArcApiClient.class) {
+                if (generation != authGeneration) throw new Exception(LIVE_CANCELLED);
+                sp.edit().putString("bearer_token", token).apply();
+            }
+            return fetchAuthenticatedGetJson(token, path);
+        }
     }
 
     private static final class AuthExpiredException extends Exception {

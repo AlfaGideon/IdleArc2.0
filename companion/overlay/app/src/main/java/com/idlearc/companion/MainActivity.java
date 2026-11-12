@@ -184,7 +184,7 @@ public class MainActivity extends Activity {
                 }
                 liveEnabled = !liveEnabled;
                 liveBtn.setText(liveEnabled ? "● LIVE 1с" : "LIVE: выкл");
-                if (liveEnabled && activityResumed) LiveSyncManager.get().add(MainActivity.this, MainActivity.this, liveListener);
+                if (liveEnabled && activityResumed) LiveSyncManager.get().add(MainActivity.this, MainActivity.this, liveListener, activeTab);
                 else LiveSyncManager.get().remove(MainActivity.this);
                 if (!liveEnabled) liveStatus = "";
                 refreshAllViews();
@@ -260,6 +260,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void onClick(View v) {
                     activeTab = tabIdx;
+                    if (liveEnabled) LiveSyncManager.get().setTab(MainActivity.this, activeTab);
                     refreshAllViews();
                 }
             });
@@ -325,7 +326,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         activityResumed = true;
-        if (liveEnabled) LiveSyncManager.get().add(this, this, liveListener);
+        if (liveEnabled) LiveSyncManager.get().add(this, this, liveListener, activeTab);
         OtaUpdater.resumePendingInstallIfPermitted(this);
         profile = DruidProfile.load(this);
         refreshAllViews();
@@ -340,7 +341,7 @@ public class MainActivity extends Activity {
 
     private void updateLiveStatusText() {
         if (syncStatusTv != null && liveEnabled && !liveStatus.isEmpty()) {
-            syncStatusTv.setText(liveStatus + " · только dashboard; сумка и таймеры — полное обновление API");
+            syncStatusTv.setText(liveStatus);
         }
     }
 

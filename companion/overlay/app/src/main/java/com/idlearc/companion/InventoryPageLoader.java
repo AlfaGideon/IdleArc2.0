@@ -17,6 +17,15 @@ public final class InventoryPageLoader {
     private InventoryPageLoader() {}
 
     public static Result load(Fetcher fetcher) throws Exception {
+        return loadInternal(fetcher, false);
+    }
+
+    /** Atomic live refresh: never replace a complete bag with a partial response. */
+    public static Result loadStrict(Fetcher fetcher) throws Exception {
+        return loadInternal(fetcher, true);
+    }
+
+    private static Result loadInternal(Fetcher fetcher, boolean strict) throws Exception {
         Result result = new Result();
         String first = fetcher.get("/api/inventory");
         Map<String, Object> root = SimpleJson.parseObject(first);
@@ -25,26 +34,37 @@ public final class InventoryPageLoader {
         append(root, result.items, ids);
         result.pages.add(first);
         Map<String, Object> pag = SimpleJson.asMap(root.get("characterItemsPaginated"));
+        if (strict && (pag == null || SimpleJson.asList(pag.get("data")) == null || !pag.containsKey("total")))
+            throw new Exception("Неверный ответ сумки");
         result.total = pag == null ? result.items.size() : SimpleJson.intVal(pag, "total", result.items.size());
         int last = pag == null ? 1 : SimpleJson.intVal(pag, "last_page", 1);
         if (pag != null && last <= 1) {
             int perPage = SimpleJson.intVal(pag, "per_page", 0);
             if (perPage > 0) last = Math.max(last, (result.total + perPage - 1) / perPage);
         }
+        if (strict && last > 100) throw new Exception("Сумка превышает лимит страниц");
         last = Math.min(last, 100); // Bound the number of requests for a malformed response.
         for (int page = 2; page <= last; page++) {
             try {
                 String json = fetcher.get("/api/items-page/" + page);
                 Map<String, Object> next = SimpleJson.parseObject(json);
                 if (next == null || SimpleJson.intVal(next, "current_page", 0) != page
-                        || SimpleJson.asList(next.get("data")) == null) break;
-                if (append(next, result.items, ids) == 0) break;
+                        || SimpleJson.asList(next.get("data")) == null) {
+                    if (strict) throw new Exception("Неполная страница сумки");
+                    break;
+                }
+                if (append(next, result.items, ids) == 0) {
+                    if (strict) throw new Exception("Неполная страница сумки");
+                    break;
+                }
                 result.pages.add(json);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                if (strict) throw e;
                 // Keep successfully loaded pages and expose the partial count to the user.
                 break;
             }
         }
+        if (strict && result.items.size() != result.total) throw new Exception("Неполная сумка: число предметов изменилось");
         result.total = Math.max(result.total, result.items.size());
         return result;
     }
