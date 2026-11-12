@@ -37,3 +37,17 @@ for path in ('/api/inventory', '/api/items-page/1', '/api/items-page/2', '/api/i
     keys = list(data.keys()) if isinstance(data, dict) else []
     meta = {k:v for k,v in data.items() if k in ('current_page', 'last_page', 'total', 'per_page') and isinstance(v, (int, float, str))} if isinstance(data, dict) else {}
     print('::notice::ITEMS_PAGE=' + json.dumps({'path': path, 'http': status, 'keys': keys, 'meta': meta, 'arrays': entries}, separators=(',', ':'))[:1800])
+# Validate the complete page sequence without printing item contents or identifiers.
+status, inv = fetch('/api/inventory')
+pag = inv.get('characterItemsPaginated', {}) if isinstance(inv, dict) else {}
+last = min(100, int(pag.get('last_page', 1)))
+seen = set()
+for page in range(1, last + 1):
+    status, data = fetch('/api/items-page/' + str(page))
+    if status != 200 or not isinstance(data, dict) or data.get('current_page') != page or not isinstance(data.get('data'), list):
+        raise RuntimeError('Unexpected items-page response at page ' + str(page))
+    for item in data['data']:
+        if not isinstance(item, dict) or item.get('id') is None:
+            raise RuntimeError('Missing item identifier on page ' + str(page))
+        seen.add(str(item['id']))
+print('::notice::ITEMS_COMPLETE=' + json.dumps({'pages': last, 'unique_items': len(seen), 'server_total': pag.get('total'), 'complete': len(seen) == pag.get('total')}))
