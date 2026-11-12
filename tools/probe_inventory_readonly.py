@@ -95,8 +95,11 @@ try:
         print('::notice::APP_SCAN=HTTP_' + str(apk.status_code))
     else:
         with zipfile.ZipFile(io.BytesIO(apk.content)) as archive:
-            libs = [n for n in archive.namelist() if n.endswith('/libapp.so')]
-            blob = archive.read(libs[0]) if libs else b''
+            names = archive.namelist()
+            libs = [n for n in names if n.endswith('/libapp.so')]
+            print('::notice::APP_STRUCTURE=' + json.dumps({'lib_count': len(libs), 'nested_apks': sum(n.endswith('.apk') for n in names), 'dex_count': sum(n.endswith('.dex') for n in names)}))
+            relevant = libs[:1] + [n for n in names if n.endswith('.dex')]
+            blob = b'\x00'.join(archive.read(n) for n in relevant)
         routes = set()
         for match in re.findall(rb'/?api/[a-zA-Z0-9_/\-]{2,100}', blob):
             route = match.decode('ascii').lstrip('/')
@@ -118,3 +121,11 @@ try:
             print('::notice::APP_STRINGS=' + json.dumps(matches[i:i+12])[:1800])
 except Exception as exc:
     print('::notice::APP_SCAN_ERROR=' + type(exc).__name__)
+
+# Check whether the authenticated web inventory exposes a separate read-only route.
+for path in ('/inventory?page=1', '/inventory?page=2', '/api/inventory?page=2'):
+    try:
+        response = session.get(BASE + path, headers=headers, timeout=20, allow_redirects=False)
+        print('::notice::WEB_ROUTE=' + json.dumps({'path': path, 'status': response.status_code, 'content_type': response.headers.get('content-type', '').split(';')[0], 'redirect': bool(response.headers.get('location'))}))
+    except Exception as exc:
+        print('::notice::WEB_ROUTE=' + json.dumps({'path': path, 'error': type(exc).__name__}))
