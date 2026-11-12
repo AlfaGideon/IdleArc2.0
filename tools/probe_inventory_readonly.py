@@ -83,3 +83,38 @@ def timing_keys(value, prefix='', depth=0):
 for path in ('/api/dashboard', '/api/dungeon', '/api/guild'):
     data = get(path)
     print('::notice::TIMER_KEYS=' + json.dumps({'path': path, 'keys': timing_keys(data)}, separators=(',', ':'))[:1800])
+
+# Inspect public app package for actual route strings, without persisting its contents.
+import io
+import re
+import zipfile
+apk_url = 'https://d.apkpure.net/b/APK/com.mikhaelstudio.idlearc?version=latest'
+try:
+    apk = session.get(apk_url, timeout=100, allow_redirects=True)
+    if apk.status_code != 200:
+        print('::notice::APP_SCAN=HTTP_' + str(apk.status_code))
+    else:
+        with zipfile.ZipFile(io.BytesIO(apk.content)) as archive:
+            libs = [n for n in archive.namelist() if n.endswith('/libapp.so')]
+            blob = archive.read(libs[0]) if libs else b''
+        routes = set()
+        for match in re.findall(rb'/?api/[a-zA-Z0-9_/\-]{2,100}', blob):
+            route = match.decode('ascii').lstrip('/')
+            if any(w in route.lower() for w in ('boss', 'inventory', 'item', 'equipment', 'fight', 'battle', 'combat')):
+                routes.add('/' + route)
+        # Dart's string table includes strings terminated by zero bytes.
+        strings = set()
+        for match in re.findall(rb'[ -~]{4,160}', blob):
+            text = match.decode('ascii')
+            low = text.lower()
+            if any(w in low for w in ('inventorypage', 'inventory_page', 'itemspage', 'items_page',
+                                      'characteritemspaginated', 'bosscooldown', 'boss_cooldown',
+                                      'bossfight', 'boss_fight', '/inventory')):
+                if len(text) <= 130 and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
+                    strings.add(text)
+        print('::notice::APP_ROUTES=' + json.dumps(sorted(routes))[:1800])
+        matches = sorted(strings)
+        for i in range(0, min(len(matches), 150), 12):
+            print('::notice::APP_STRINGS=' + json.dumps(matches[i:i+12])[:1800])
+except Exception as exc:
+    print('::notice::APP_SCAN_ERROR=' + type(exc).__name__)
