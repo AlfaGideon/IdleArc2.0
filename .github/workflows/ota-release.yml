@@ -79,17 +79,18 @@ jobs:
 
       - name: Verify update uses the existing signing certificate
         run: |
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          APKSIGNER=$(find "$SDK_ROOT/build-tools" -name apksigner -type f | sort -V | tail -1)
-          test -n "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs releases/IdleArcHelper-v4.1.0.apk
-          "$APKSIGNER" verify --verbose --print-certs "releases/${{ steps.ver.outputs.apk_name }}"
-          old_cert=$("$APKSIGNER" verify --verbose --print-certs releases/IdleArcHelper-v4.1.0.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-          new_cert=$("$APKSIGNER" verify --verbose --print-certs "releases/${{ steps.ver.outputs.apk_name }}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-          if [ -z "$old_cert" ] || [ "$old_cert" != "$new_cert" ]; then
-            echo "::error::APK signing certificates differ or could not be read (old: ${old_cert:-missing}, new: ${new_cert:-missing})"
-            exit 1
-          fi
+          python3 - "releases/IdleArcHelper-v4.1.0.apk" "releases/${{ steps.ver.outputs.apk_name }}" <<'PYCODE'
+          import hashlib, sys
+          from androguard.core.apk import APK
+          from loguru import logger
+          logger.remove()
+          def certificates(path):
+              return {hashlib.sha256(cert.dump()).hexdigest() for cert in APK(path).get_certificates()}
+          old, new = certificates(sys.argv[1]), certificates(sys.argv[2])
+          if not old or old != new:
+              raise SystemExit("APK signing certificate does not match v4.1.0")
+          print("Signing certificate matches v4.1.0")
+          PYCODE
 
       - name: Publish GitHub Release & Git Tag (OTA endpoint)
         env:
