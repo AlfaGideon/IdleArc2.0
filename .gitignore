@@ -6,6 +6,7 @@ __pycache__/
 
 # Supplied application packages and derived reports are local-only.
 *.apk
+!releases/IdleArcHelper-*.apk
 !releases/IdleArc-DruidHelper-*.apk
 *.apks
 *.aab

@@ -23,6 +23,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -150,20 +151,20 @@ public class OverlayService extends Service {
     }
 
     private View buildBubbleView() {
-        TextView tv = new TextView(this);
-        tv.setText("🌿");
-        tv.setTextSize(21f);
-        tv.setGravity(Gravity.CENTER);
-        int sz = dp(48);
-        tv.setLayoutParams(new FrameLayout.LayoutParams(sz, sz));
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(R.drawable.ic_app_medallion);
+        int sz = dp(50);
+        int pad = dp(3);
+        iv.setPadding(pad, pad, pad, pad);
+        iv.setLayoutParams(new FrameLayout.LayoutParams(sz, sz));
 
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(Color.parseColor("#EE0E241C"));
-        circle.setStroke(dp(2), Color.parseColor("#69F0AE"));
-        tv.setBackground(circle);
+        circle.setColor(Color.parseColor("#F00C1322"));
+        circle.setStroke(dp(2), Color.parseColor("#FFD54F"));
+        iv.setBackground(circle);
 
-        attachDragAndClick(tv, new Runnable() {
+        attachDragAndClick(iv, new Runnable() {
             @Override
             public void run() {
                 profile = DruidProfile.load(OverlayService.this);
@@ -179,7 +180,7 @@ public class OverlayService extends Service {
                 }
             }
         });
-        return tv;
+        return iv;
     }
 
     private LinearLayout buildExpandedCardView() {
@@ -209,8 +210,8 @@ public class OverlayService extends Service {
         titleCol.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView titleTv = new TextView(this);
-        titleTv.setText("🌿 Druid Helper v3.1");
-        titleTv.setTextColor(Color.parseColor("#69F0AE"));
+        titleTv.setText("⭐ IdleArcHelper v4.0");
+        titleTv.setTextColor(Color.parseColor("#FFD54F"));
         titleTv.setTextSize(13.5f);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
         titleCol.addView(titleTv);
@@ -547,8 +548,8 @@ public class OverlayService extends Service {
         Notification.Builder nb = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
-        Notification n = nb.setContentTitle("🌿 Druid Helper v3.1")
-                .setContentText("Нативные карточки и будильник откатов активны")
+        Notification n = nb.setContentTitle("⭐ IdleArcHelper v4.0")
+                .setContentText("Мультиклассовый помощник, Сумка и Будильник откатов активны")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .setContentIntent(pi)
                 .setOngoing(true)

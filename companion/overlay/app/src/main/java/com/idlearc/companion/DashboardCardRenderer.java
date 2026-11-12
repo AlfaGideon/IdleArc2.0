@@ -36,6 +36,9 @@ public final class DashboardCardRenderer {
         void onRequestRefresh();
     }
 
+    private static int activeItemBagFilter = 0; // 0 = Все, 1 = Уничтожить, 2 = Оставить
+    private static int activeGemBagFilter = 0;  // 0 = Все, 1 = Вставить/Слить, 2 = В пыль
+
     private DashboardCardRenderer() {
     }
 
@@ -315,17 +318,21 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
+        HeroClassProfile.HeroClass hc = HeroClassProfile.resolveHeroClass(dash, p);
         Map<String, Object> bs = SimpleJson.asMap(dash.get("bonusStats"));
         double petAvg = bs != null ? SimpleJson.num(bs, "petDamageFinalAvg", 0.0) : 0.0;
         double trueMultM = bs != null ? SimpleJson.num(bs, "petDamageTrueMultiplier", 0.0) / 1_000_000.0 : 0.0;
+        double heroAvgAtk = 0.5 * (p.minAtk + p.maxAtk);
         int gs = SimpleJson.intVal(dash, "gear_score", 0);
         double lvlProg = SimpleJson.num(dash, "levelProgress", 0.0);
         String stance = RuGameDictionary.stanceRu(SimpleJson.str(dash, "activeCombatStance", ""));
 
-        // 1. Паспорт персонажа
+        // 1. Паспорт персонажа (Все 5 классов)
         LinearLayout heroCard = makeCard(ctx, "#121E29", "#4DD0E1");
         LinearLayout topRow = row(ctx);
-        TextView nameTv = cardTitle(ctx, "🌿 " + SimpleJson.str(dash, "name", "Друид") + " · Ур. " + p.charLevel, "#80DEEA");
+        String modeMark = (p.overrideClassId >= 1 && p.overrideClassId <= 5) ? (" [просмотр: " + hc.ruName + "]") : "";
+        TextView nameTv = cardTitle(ctx, hc.icon + " " + SimpleJson.str(dash, "name", hc.ruName)
+                + " · " + hc.ruName + " Ур. " + p.charLevel + modeMark, "#80DEEA");
         nameTv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         topRow.addView(nameTv);
         topRow.addView(badge(ctx, "GS " + gs, "#263849", "#FFD54F"));
@@ -337,14 +344,30 @@ public final class DashboardCardRenderer {
 
         LinearLayout kpiRow = row(ctx);
         kpiRow.setPadding(0, dp(ctx, 6), 0, 0);
-        kpiRow.addView(statTile(ctx, "🐾 Ср. удар пета", RuGameDictionary.fmtBig(petAvg), "#69F0AE"));
-        addSpace(ctx, kpiRow, 6);
-        kpiRow.addView(statTile(ctx, "✖ Множитель", String.format(Locale.US, "×%.2fM", trueMultM), "#FFD54F"));
-        addSpace(ctx, kpiRow, 6);
-        kpiRow.addView(statTile(ctx, "🧠 Инт / Ловк",
-                Math.round(p.intelligence) + " / " + Math.round(p.agility), "#81D4FA"));
+        if (hc == HeroClassProfile.HeroClass.DRUID) {
+            kpiRow.addView(statTile(ctx, "🐾 Ср. удар пета", RuGameDictionary.fmtBig(petAvg), "#69F0AE"));
+            addSpace(ctx, kpiRow, 6);
+            kpiRow.addView(statTile(ctx, "✖ Множитель", String.format(Locale.US, "×%.2fM", trueMultM), "#FFD54F"));
+            addSpace(ctx, kpiRow, 6);
+            kpiRow.addView(statTile(ctx, "🧠 Инт / Ловк",
+                    Math.round(p.intelligence) + " / " + Math.round(p.agility), "#81D4FA"));
+        } else {
+            kpiRow.addView(statTile(ctx, "⚔️ Атака героя", RuGameDictionary.fmtBig(heroAvgAtk), "#69F0AE"));
+            addSpace(ctx, kpiRow, 6);
+            kpiRow.addView(statTile(ctx, "💪 Сил / Инт",
+                    Math.round(p.strength) + " / " + Math.round(p.intelligence), "#FFD54F"));
+            addSpace(ctx, kpiRow, 6);
+            kpiRow.addView(statTile(ctx, "⚡ Дв.уд / Дв.ур",
+                    Math.round(p.doubleHitChance) + "% / " + Math.round(p.doubleDamageChance) + "%", "#81D4FA"));
+        }
         heroCard.addView(kpiRow);
         root.addView(heroCard);
+
+        // 1b. Гайд механик активного класса и эталонный Бонус дропа
+        LinearLayout clsCard = makeCard(ctx, "#141D2B", "#7E57C2");
+        clsCard.addView(cardTitle(ctx, hc.icon + " Профиль класса «" + hc.ruName + "» и главный Бонус дропа", "#D1C4E9"));
+        clsCard.addView(bodyText(ctx, HeroClassProfile.buildClassGuide(hc, p.mode), "#EDE7F6", 12f));
+        root.addView(clsCard);
 
         // 2. Графические прогресс-бары капов + Конверсия оверкапа крита
         LinearLayout capsCard = makeCard(ctx, "#121C24", "#37474F");
@@ -562,8 +585,10 @@ public final class DashboardCardRenderer {
                                              final ApiDashboardEngine.ServerItemAudit item,
                                              final int posOneBased) {
         final AffixPositionOptimizer.AffixType[] candidates = {
+            AffixPositionOptimizer.AffixType.STRENGTH,
             AffixPositionOptimizer.AffixType.INTELLIGENCE,
             AffixPositionOptimizer.AffixType.DEXTERITY,
+            AffixPositionOptimizer.AffixType.ADDED_DAMAGE,
             AffixPositionOptimizer.AffixType.PET_DAMAGE,
             AffixPositionOptimizer.AffixType.DODGE_CHANCE,
             AffixPositionOptimizer.AffixType.DAMAGE_REDUCTION,
@@ -614,19 +639,196 @@ public final class DashboardCardRenderer {
     }
 
     // =========================================================================
-    // ВКЛАДКА 3: СУМКА, КАЛЬКУЛЯТОР РЕСУРСОВ (ROI), СЕТЫ И НОВЫЕ РУНЫ
+    // ВКЛАДКА 3: ПОЛНАЯ СУМКА (ПРЕДМЕТЫ ПО БОНУСУ ДРОПА + САМОЦВЕТЫ) И ROI
     // =========================================================================
-    public static void renderBagAndResourcesTab(Context ctx,
-                                                LinearLayout root,
-                                                Map<String, Object> dash,
-                                                DruidProfile p) {
+    public static void renderBagAndResourcesTab(final Context ctx,
+                                                final LinearLayout root,
+                                                final Map<String, Object> dash,
+                                                final DruidProfile p) {
         root.removeAllViews();
         if (dash == null || p == null) {
             root.addView(emptySyncCard(ctx));
             return;
         }
 
-        // 1. Калькулятор ROI ресурсов и кошелёк героя
+        // 1. ПОЛНЫЙ РАЗБОР ИНВЕНТАРЯ ПРЕДМЕТОВ (/api/inventory) СТРОГО ПО БОНУСУ ДРОПА И КЛАССУ
+        final BagAndPetAdvisor.InventoryAuditSummary invSum = BagAndPetAdvisor.evaluateInventoryItems(
+                dash, IdleArcApiClient.getCachedInventoryItems(), p);
+        LinearLayout invCard = makeCard(ctx, "#101B25", "#29B6F6");
+        invCard.addView(cardTitle(ctx,
+                "🎒 Сумка предметов (" + invSum.totalItems + " шт.) — фильтр под «" + invSum.heroClass.ruName + "»",
+                "#81D4FA"));
+        invCard.addView(bodyText(ctx,
+                "Оценка строится СТРОГО по неизменяемому Бонусу дропа и классу (обычные аффиксы всегда можно перековать!).",
+                "#B0BEC5", 11.5f));
+
+        LinearLayout invKpi = row(ctx);
+        invKpi.setPadding(0, dp(ctx, 6), 0, dp(ctx, 6));
+        invKpi.addView(statTile(ctx, "📦 Всего вещей", String.valueOf(invSum.totalItems), "#B3E5FC"));
+        addSpace(ctx, invKpi, 6);
+        invKpi.addView(statTile(ctx, "🔥 Оставить", String.valueOf(invSum.keepCount), "#69F0AE"));
+        addSpace(ctx, invKpi, 6);
+        invKpi.addView(statTile(ctx, "🗑️ Уничтожить", String.valueOf(invSum.salvageCount), "#FF8A80"));
+        invCard.addView(invKpi);
+
+        // Кнопки быстрого фильтра Сумки предметов
+        LinearLayout invFilterRow = row(ctx);
+        invFilterRow.setPadding(0, 0, 0, dp(ctx, 6));
+        String[] fTitles = {
+            "Все (" + invSum.totalItems + ")",
+            "🗑️ Уничтожить (" + invSum.salvageCount + ")",
+            "🔥 Оставить (" + invSum.keepCount + ")"
+        };
+        for (int fi = 0; fi < 3; fi++) {
+            final int fIdx = fi;
+            boolean sel = (activeItemBagFilter == fi);
+            Button fb = pillButton(ctx, fTitles[fi],
+                    sel ? "#1E4660" : "#16222E",
+                    sel ? "#FFFFFF" : "#90A4AE");
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (fi < 2) lp.rightMargin = dp(ctx, 5);
+            fb.setLayoutParams(lp);
+            fb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    activeItemBagFilter = fIdx;
+                    renderBagAndResourcesTab(ctx, root, dash, p);
+                }
+            });
+            invFilterRow.addView(fb);
+        }
+        invCard.addView(invFilterRow);
+
+        if (invSum.entries.isEmpty()) {
+            invCard.addView(bodyText(ctx,
+                    "Нажми «🔄 Обновить API», чтобы загрузить все страницы твоего инвентаря (/api/inventory).",
+                    "#FFD54F", 12f));
+        } else {
+            int renderedItems = 0;
+            for (BagAndPetAdvisor.BagItemEntry ie : invSum.entries) {
+                if (activeItemBagFilter == 1 && ie.action != BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
+                if (activeItemBagFilter == 2 && ie.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) continue;
+                renderedItems++;
+
+                LinearLayout iBox = makeCard(ctx, "#0C151D", ie.action.fgHex);
+                iBox.setPadding(dp(ctx, 9), dp(ctx, 7), dp(ctx, 9), dp(ctx, 7));
+
+                LinearLayout iTop = row(ctx);
+                TextView iTitle = bodyText(ctx, ie.slotRu + " — " + ie.itemName + (ie.locked ? " 🔒" : ""), "#FFFFFF", 12.5f);
+                iTitle.setTypeface(Typeface.DEFAULT_BOLD);
+                iTitle.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                iTop.addView(iTitle);
+                iTop.addView(badge(ctx, "T" + ie.tier + (ie.tierLevel > 0 ? " +" + ie.tierLevel : ""),
+                        "#1C2A38", RuGameDictionary.tierColorHex(ie.tier)));
+                iBox.addView(iTop);
+
+                LinearLayout dropRow = row(ctx);
+                dropRow.setPadding(0, dp(ctx, 3), 0, dp(ctx, 3));
+                String dropTxt = ie.dropBonusValue > 0
+                        ? ("🎁 Бонус дропа: " + ie.dropBonusRu + " +" + String.format(Locale.US, "%.1f%%", ie.dropBonusValue))
+                        : "🎁 Без бонуса дропа";
+                TextView dropTv = bodyText(ctx, dropTxt, "#80DEEA", 12f);
+                dropTv.setTypeface(Typeface.DEFAULT_BOLD);
+                dropTv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                dropRow.addView(dropTv);
+                dropRow.addView(badge(ctx, ie.action.badgeText, ie.action.bgHex, ie.action.fgHex));
+                iBox.addView(dropRow);
+
+                if (!ie.implicitSummary.isEmpty()) {
+                    iBox.addView(bodyText(ctx, "База: " + ie.implicitSummary + " · Ур. " + ie.itemLevel, "#90A4AE", 11f));
+                }
+                iBox.addView(bodyText(ctx, ie.reasonRu, "#ECEFF1", 11.5f));
+                invCard.addView(iBox);
+            }
+            if (renderedItems == 0) {
+                invCard.addView(bodyText(ctx, "В выбранном фильтре предметов нет.", "#90A4AE", 12f));
+            }
+        }
+        root.addView(invCard);
+
+        // 2. ПОЛНЫЙ МЕШОК САМОЦВЕТОВ (/api/gems bag)
+        final BagAndPetAdvisor.GemBagAuditSummary gemSum = BagAndPetAdvisor.evaluateGemBag(
+                dash, IdleArcApiClient.getCachedGemsData(), p);
+        LinearLayout gemBagCard = makeCard(ctx, "#111B24", "#AB47BC");
+        gemBagCard.addView(cardTitle(ctx,
+                "💎 Мешок самоцветов (" + gemSum.bagCount + " / " + gemSum.bagCap + ")",
+                "#E1BEE7"));
+        gemBagCard.addView(labeledProgressBar(ctx, "Заполненность мешка камней",
+                gemSum.bagCount + " / " + gemSum.bagCap,
+                gemSum.bagCap > 0 ? (gemSum.bagCount * 100.0 / gemSum.bagCap) : 0.0, "#BA68C8"));
+
+        LinearLayout famRow = row(ctx);
+        famRow.setPadding(0, dp(ctx, 4), 0, dp(ctx, 6));
+        famRow.addView(statTile(ctx, "🟢 Нефрит", String.valueOf(gemSum.countJade), "#69F0AE"));
+        addSpace(ctx, famRow, 5);
+        famRow.addView(statTile(ctx, "🔵 Лазурит", String.valueOf(gemSum.countLapis), "#4FC3F7"));
+        addSpace(ctx, famRow, 5);
+        famRow.addView(statTile(ctx, "🔴 Гранат", String.valueOf(gemSum.countGarnet), "#FF8A80"));
+        addSpace(ctx, famRow, 5);
+        famRow.addView(statTile(ctx, "🟡 Янтарь", String.valueOf(gemSum.countAmber), "#FFD54F"));
+        gemBagCard.addView(famRow);
+
+        if (gemSum.salvageGemsCount > 0 || gemSum.upgradeSocketsCount > 0) {
+            gemBagCard.addView(bodyText(ctx, String.format(Locale.US,
+                    "💡 Апгрейдов в твои оправы: %d шт. · Ненужных T4/T5 камней под разбор: %d шт. (дадут +%s Пыли!)",
+                    gemSum.upgradeSocketsCount, gemSum.salvageGemsCount, RuGameDictionary.fmtBig(gemSum.totalSalvageDust)),
+                    "#FFE082", 12f));
+        }
+
+        LinearLayout gemFilterRow = row(ctx);
+        gemFilterRow.setPadding(0, dp(ctx, 4), 0, dp(ctx, 6));
+        String[] gfTitles = {
+            "Все (" + gemSum.bagCount + ")",
+            "💎 В слот / Слить",
+            "🔨 В пыль (" + gemSum.salvageGemsCount + ")"
+        };
+        for (int gfi = 0; gfi < 3; gfi++) {
+            final int gfIdx = gfi;
+            boolean sel = (activeGemBagFilter == gfi);
+            Button gfb = pillButton(ctx, gfTitles[gfi],
+                    sel ? "#3A234B" : "#181E29",
+                    sel ? "#FFFFFF" : "#90A4AE");
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (gfi < 2) lp.rightMargin = dp(ctx, 5);
+            gfb.setLayoutParams(lp);
+            gfb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    activeGemBagFilter = gfIdx;
+                    renderBagAndResourcesTab(ctx, root, dash, p);
+                }
+            });
+            gemFilterRow.addView(gfb);
+        }
+        gemBagCard.addView(gemFilterRow);
+
+        if (gemSum.entries.isEmpty()) {
+            gemBagCard.addView(bodyText(ctx,
+                    "Мешок самоцветов пуст (или нажми «🔄 Обновить API» для подгрузки /api/gems).",
+                    "#B0BEC5", 12f));
+        } else {
+            for (BagAndPetAdvisor.BagGemEntry ge : gemSum.entries) {
+                if (activeGemBagFilter == 1 && (ge.action == BagAndPetAdvisor.GemBagAction.SALVAGE_DUST
+                        || ge.action == BagAndPetAdvisor.GemBagAction.KEEP_RESERVE)) continue;
+                if (activeGemBagFilter == 2 && ge.action != BagAndPetAdvisor.GemBagAction.SALVAGE_DUST) continue;
+
+                LinearLayout gBox = makeCard(ctx, "#0D151D", ge.familyHex);
+                gBox.setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6));
+                LinearLayout gTop = row(ctx);
+                TextView gt = bodyText(ctx, ge.titleRu + (ge.locked ? " 🔒" : ""), ge.familyHex, 12.5f);
+                gt.setTypeface(Typeface.DEFAULT_BOLD);
+                gt.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                gTop.addView(gt);
+                gTop.addView(badge(ctx, ge.action.badgeText, ge.action.bgHex, ge.action.fgHex));
+                gBox.addView(gTop);
+                gBox.addView(bodyText(ctx, "Доп. статы: " + ge.secondariesRu, "#CFD8DC", 11.5f));
+                gBox.addView(bodyText(ctx, ge.reasonRu, "#ECEFF1", 11.5f));
+                gemBagCard.addView(gBox);
+            }
+        }
+        root.addView(gemBagCard);
+
+        // 3. Калькулятор ROI ресурсов и кошелёк героя
         ApiFeatureAnalyzers.ResourceRoiReport roi = ApiFeatureAnalyzers.analyzeResourcesAndRoi(dash, p);
         if (roi != null) {
             LinearLayout walletCard = makeCard(ctx, "#121D26", "#FFD54F");
@@ -670,21 +872,7 @@ public final class DashboardCardRenderer {
             }
         }
 
-        // 2. Добыча в сумке (newLoot + newGems)
-        LinearLayout bagCard = makeCard(ctx, "#121C24", "#4FC3F7");
-        bagCard.addView(cardTitle(ctx, "🎒 Аудит новых вещей и камней в Сумке", "#81D4FA"));
-        List<Object> newLoot = SimpleJson.asList(dash.get("newLoot"));
-        List<Object> newGems = SimpleJson.asList(dash.get("newGems"));
-        if ((newLoot == null || newLoot.isEmpty()) && (newGems == null || newGems.isEmpty())) {
-            bagCard.addView(bodyText(ctx, "✨ В сумке сейчас нет неразобранных вещей и новых самоцветов.", "#A5D6A7", 12.5f));
-        } else {
-            // Используем точный расчёт из ApiDashboardEngine, отформатированный через RuGameDictionary
-            String bagReport = ApiDashboardEngine.buildBagLootAndGemsReport(dash, p);
-            bagCard.addView(bodyText(ctx, bagReport, "#EBF3FA", 12f));
-        }
-        root.addView(bagCard);
-
-        // 3. Сеты, Новые руны, Пресеты и Автоматизация
+        // 4. Сеты, Новые руны, Пресеты и Автоматизация
         LinearLayout metaCard = makeCard(ctx, "#121C24", "#7E57C2");
         metaCard.addView(cardTitle(ctx, "🧩 Комплекты (Сеты), Новые Руны и Автоматика", "#D1C4E9"));
         for (String s : ApiFeatureAnalyzers.analyzeGearSetsAndElements(dash)) {
@@ -828,6 +1016,28 @@ public final class DashboardCardRenderer {
             return;
         }
 
+        // 0. Глубокий оптимизатор аффиксов питомцев (Уровень + Капы + Самоцветы + Класс)
+        BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(
+                dash, IdleArcApiClient.getCachedGemsData(), p);
+        LinearLayout advCard = makeCard(ctx, "#132029", "#26C6DA");
+        advCard.addView(cardTitle(ctx, "🧠 Оптимизатор аффиксов питомцев (под твой уровень, капы и камни)", "#80DEEA"));
+        advCard.addView(bodyText(ctx, petAdv.mechanicsExplainer, "#CFD8DC", 11.5f));
+        advCard.addView(subHeader(ctx, petAdv.levelStageTitle + " — твоя лучшая 4-ка аффиксов сейчас:"));
+        for (String rLine : petAdv.recommended4AffixesNow) {
+            advCard.addView(bulletLine(ctx, rLine, "#E0F7FA"));
+        }
+        advCard.addView(subHeader(ctx, "💎 Капы и связка с твоими Самоцветами:"));
+        for (String gNote : petAdv.gemSynergyNotes) {
+            advCard.addView(bulletLine(ctx, gNote, "#FFF59D"));
+        }
+        if (!petAdv.perPetActionPlan.isEmpty()) {
+            advCard.addView(subHeader(ctx, "🔧 Что перекрутить / докачать на твоих 4 петах:"));
+            for (String pAct : petAdv.perPetActionPlan) {
+                advCard.addView(bulletLine(ctx, pAct, "#C8E6C9"));
+            }
+        }
+        root.addView(advCard);
+
         // 1. Карточки 4 боевых питомцев
         LinearLayout petsHeader = makeCard(ctx, "#121C24", "#66BB6A");
         petsHeader.addView(cardTitle(ctx,
@@ -946,10 +1156,11 @@ public final class DashboardCardRenderer {
             return;
         }
 
-        // 1. Аудит дерева навыков Друида (ID 73..90) с детектором оверкапа
+        // 1. Аудит дерева навыков активного класса (все 5 классов, IDs 1..90) с детектором оверкапа
+        HeroClassProfile.HeroClass hc = HeroClassProfile.resolveHeroClass(dash, p);
         LinearLayout skillCard = makeCard(ctx, "#121C24", "#4DB6AC");
-        skillCard.addView(cardTitle(ctx, "🌳 Классовые навыки Друида (+Все навыки: +" + p.bonusAllClassSkills + ")", "#80CBC4"));
-        skillCard.addView(bodyText(ctx, ApiDashboardEngine.buildSkillsAuditReport(dash, p, gameCfg), "#E0F2F1", 12f));
+        skillCard.addView(cardTitle(ctx, hc.icon + " Классовые навыки: " + hc.ruName + " (+Все навыки: +" + p.bonusAllClassSkills + ")", "#80CBC4"));
+        skillCard.addView(bodyText(ctx, HeroClassProfile.buildMultiClassSkillsReport(dash, p, gameCfg), "#E0F2F1", 12f));
         root.addView(skillCard);
 
         // 2. Пассивки, Вознесение, Звёздные вехи, Гильдия и Зоны мира

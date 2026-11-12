@@ -53,7 +53,7 @@ jobs:
           VER_CODE=$(grep -oP 'android:versionCode="\K[0-9]+' companion/overlay/app/src/main/AndroidManifest.xml)
           echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
           echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
-          echo "apk_name=IdleArc-DruidHelper-v${VER_NAME}.apk" >> "$GITHUB_OUTPUT"
+          echo "apk_name=IdleArcHelper-v${VER_NAME}.apk" >> "$GITHUB_OUTPUT"
 
       - name: Verify or build signed APK with GitHub Secrets
         env:

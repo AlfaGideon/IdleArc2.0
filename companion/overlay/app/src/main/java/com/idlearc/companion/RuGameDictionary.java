@@ -134,9 +134,83 @@ public final class RuGameDictionary {
                 return "Дроп самоцветов";
             case "lucky_chance":
             case "lucky_tier":
-                return "Шанс удачного тира";
+            case "lucky":
+                return "Шанс дропа предметов";
+            case "fierce":
+                return "Урон атаки";
+            case "precise":
+                return "Шанс крита";
+            case "brutal":
+                return "Критический урон";
+            case "relentless":
+            case "frenzy":
+                return "Шанс двойного удара";
+            case "devastating":
+                return "Шанс двойного урона";
+            case "slayers":
+            case "boss_damage_bonus":
+                return "Урон по боссам";
+            case "fortified":
+                return "Макс. здоровье %";
+            case "armored":
+                return "Защита %";
+            case "resilient":
+                return "Снижение урона";
+            case "evasive":
+                return "Уклонение";
+            case "vampiric":
+                return "Здоровье за удар";
+            case "draining":
+                return "Здоровье за убийство";
+            case "bloodthirsty":
+            case "bloodthirst_percent":
+                return "Кровожадность %";
+            case "prosperous":
+                return "Бонус золота";
+            case "scholarly":
+                return "Бонус опыта";
+            case "scavengers":
+                return "Дроп материалов";
+            case "runic":
+                return "Дроп рун";
+            case "jeweled":
+                return "Дроп рубинов";
+            case "damage_conversion":
+                return "Конверсия в стихию";
+            case "melee_physical_damage":
+                return "Физический урон";
             default:
                 return humanizeSlug(rawKey);
+        }
+    }
+
+    /** Перевод названия класса героя (1..5) */
+    public static String classNameRu(int classId, String rawName) {
+        switch (classId) {
+            case 1: return "Воин";
+            case 2: return "Лучник";
+            case 3: return "Маг";
+            case 4: return "Разбойник";
+            case 5: return "Друид";
+        }
+        if (rawName != null) {
+            String low = rawName.trim().toLowerCase(Locale.ROOT);
+            if (low.contains("war")) return "Воин";
+            if (low.contains("arch") || low.contains("rang")) return "Лучник";
+            if (low.contains("mag") || low.contains("wiz")) return "Маг";
+            if (low.contains("rog") || low.contains("assass") || low.contains("thief")) return "Разбойник";
+            if (low.contains("dru")) return "Друид";
+        }
+        return "Герой";
+    }
+
+    public static String classIcon(int classId) {
+        switch (classId) {
+            case 1: return "⚔️";
+            case 2: return "🏹";
+            case 3: return "🔮";
+            case 4: return "🗡️";
+            case 5: default: return "🌿";
         }
     }
 
@@ -183,25 +257,29 @@ public final class RuGameDictionary {
         return "+" + numStr + (pct ? "%" : "");
     }
 
-    /** Перевод редкости самоцветов */
+    /** Перевод редкости самоцветов (реальные серверные слаги rough/cut/polished/brilliant/flawless + 1..5) */
     public static String gemRarityRu(String slugOrNum) {
         if (slugOrNum == null) return "Обычный";
         String s = slugOrNum.trim().toLowerCase(Locale.ROOT);
         switch (s) {
             case "1":
-            case "chipped": return "Надколотый";
+            case "rough":
+            case "chipped": return "Необработанный (T1)";
             case "2":
-            case "flawed": return "Мутный";
+            case "cut":
+            case "flawed": return "Огранённый (T2)";
             case "3":
+            case "polished":
             case "normal":
-            case "regular": return "Обычный";
+            case "regular": return "Отполированный (T3)";
             case "4":
+            case "brilliant": return "Сияющий (T4)";
             case "flawless": return "Безупречный";
-            case "5":
+            case "5": return "Безупречный (T5)";
             case "perfect": return "Совершенный";
             case "6":
             case "radiant":
-            case "imperial": return "Сияющий";
+            case "imperial": return "Божественный (T6)";
             default: return humanizeSlug(slugOrNum);
         }
     }

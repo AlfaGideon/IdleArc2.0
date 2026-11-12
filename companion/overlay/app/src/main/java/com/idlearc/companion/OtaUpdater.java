@@ -216,8 +216,8 @@ public class OtaUpdater {
             public void run() {
                 File otaDir = OtaFileProvider.getOtaDir(activity);
                 String safeVer = sanitizeFileVer(info.versionName);
-                File partFile = new File(otaDir, "IdleArc-DruidHelper-update.apk.part");
-                File finalApk = new File(otaDir, "IdleArc-DruidHelper-v" + safeVer + ".apk");
+                File partFile = new File(otaDir, "IdleArcHelper-update.apk.part");
+                File finalApk = new File(otaDir, "IdleArcHelper-v" + safeVer + ".apk");
 
                 List<String> candidateUrls = buildCandidateApkUrls(info, repoSlug, safeVer, activeBranch);
                 Exception primaryErr = null;
@@ -323,23 +323,30 @@ public class OtaUpdater {
 
     private static List<String> buildCandidateApkUrls(ReleaseInfo info, String repoSlug, String safeVer, String activeBranch) {
         Set<String> urls = new LinkedHashSet<>();
-        String apkName = "IdleArc-DruidHelper-v" + safeVer + ".apk";
+        String[] apkNames = {
+            "IdleArcHelper-v" + safeVer + ".apk",
+            "IdleArc-DruidHelper-v" + safeVer + ".apk"
+        };
         // Сначала пробуем прямые зеркала raw.githubusercontent.com (не редиректят на блокируемый в РФ blob.core.windows.net!)
         if (info.apkUrl != null && info.apkUrl.contains("raw.githubusercontent.com")) {
             urls.add(info.apkUrl.trim());
         }
-        urls.add("https://raw.githubusercontent.com/" + repoSlug + "/v" + safeVer + "/releases/" + apkName);
-        if (info.sourceBranch != null && !info.sourceBranch.isEmpty()) {
-            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + info.sourceBranch + "/releases/" + apkName);
+        for (String apkName : apkNames) {
+            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/v" + safeVer + "/releases/" + apkName);
+            if (info.sourceBranch != null && !info.sourceBranch.isEmpty()) {
+                urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + info.sourceBranch + "/releases/" + apkName);
+            }
+            if (activeBranch != null && !activeBranch.trim().isEmpty()) {
+                urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + activeBranch.trim() + "/releases/" + apkName);
+            }
+            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/main/releases/" + apkName);
         }
-        if (activeBranch != null && !activeBranch.trim().isEmpty()) {
-            urls.add("https://raw.githubusercontent.com/" + repoSlug + "/" + activeBranch.trim() + "/releases/" + apkName);
-        }
-        urls.add("https://raw.githubusercontent.com/" + repoSlug + "/main/releases/" + apkName);
         if (info.apkUrl != null && !info.apkUrl.trim().isEmpty()) {
             urls.add(info.apkUrl.trim());
         }
-        urls.add("https://github.com/" + repoSlug + "/releases/download/v" + safeVer + "/" + apkName);
+        for (String apkName : apkNames) {
+            urls.add("https://github.com/" + repoSlug + "/releases/download/v" + safeVer + "/" + apkName);
+        }
         return new ArrayList<>(urls);
     }
 

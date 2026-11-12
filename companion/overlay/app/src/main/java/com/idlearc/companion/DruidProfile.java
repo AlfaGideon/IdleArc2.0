@@ -31,6 +31,10 @@ public class DruidProfile {
     public long scannedStatMask = 0L;
     public long lastUpdatedMs = 0L;
 
+    // Класс персонажа (1=Воин, 2=Лучник, 3=Маг, 4=Разбойник, 5=Друид); overrideClassId=0 -> авто из API
+    public int detectedClassId = 5;
+    public int overrideClassId = 0;
+
     // Чистые базовые значения нового персонажа до первого скана «Характеристик персонажа»
     public int charLevel = 1;
     public int forgeLevel = 1;
@@ -93,6 +97,8 @@ public class DruidProfile {
         p.scannedStatMask = sp.getLong("scannedStatMask", 0L);
         p.lastUpdatedMs = sp.getLong("lastUpdatedMs", 0L);
 
+        p.detectedClassId = sp.getInt("detectedClassId", p.detectedClassId);
+        p.overrideClassId = sp.getInt("overrideClassId", p.overrideClassId);
         p.charLevel = sp.getInt("charLevel", p.charLevel);
         p.forgeLevel = sp.getInt("forgeLevel", p.forgeLevel);
         p.gearScore = sp.getInt("gearScore", p.gearScore);
@@ -158,6 +164,8 @@ public class DruidProfile {
         ed.putLong("scannedStatMask", scannedStatMask);
         ed.putLong("lastUpdatedMs", lastUpdatedMs);
 
+        ed.putInt("detectedClassId", detectedClassId);
+        ed.putInt("overrideClassId", overrideClassId);
         ed.putInt("charLevel", charLevel);
         ed.putInt("forgeLevel", forgeLevel);
         ed.putInt("gearScore", gearScore);
@@ -314,5 +322,9 @@ public class DruidProfile {
     /** Лишний шанс крита сверх 100% вероятности крита */
     public double wastedCritChancePct() {
         return Math.max(0.0, critChance - 100.0);
+    }
+    public int effectiveClassId() {
+        return (overrideClassId >= 1 && overrideClassId <= 5) ? overrideClassId
+                : ((detectedClassId >= 1 && detectedClassId <= 5) ? detectedClassId : 5);
     }
 }

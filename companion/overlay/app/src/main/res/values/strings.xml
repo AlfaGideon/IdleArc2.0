@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Druid Helper</string>
+    <string name="app_name">IdleArcHelper</string>
     <string name="ota_github_repo">AlfaGideon/IdleArc2.0</string>
     <string name="ota_active_branch">arena/48f035f0-idlearc2-0</string>
 </resources>

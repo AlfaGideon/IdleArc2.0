@@ -36,11 +36,10 @@ OUT_DIR = ROOT / "releases"
 TOOLS_DIR = Path(os.environ.get("ANDROID_TOOLS_DIR", "/tmp/android-tools"))
 
 DEFAULT_CHANGELOG = (
-    "v3.1.0: Полностью обновлённый карточный интерфейс с графическими шкалами капов и качества ролла (0% сырых JSON/GSON-ключей, "
-    "100% русский словарь всех статов, камней, талисманов и материалов) + синхронизация откатов Данжа/Яйца/Бустов с родным системным "
-    "будильником телефона (с режимом Тихих часов 00:00–08:00) + все 16 аналитических функций: Радар аккаунта, Калькулятор вложения Пыли "
-    "и Осколков петов, Детектор До/После, Живой фарм в час, Монитор боя и этажа, Бесплатный перестановщик 20 камней, интерактивная "
-    "Примерочная статов (What-If) на каждом предмете, Сеты, Новые руны, Пассивки, Вознесение, Гильдия и Дневник прогресса!"
+    "v4.0.0 (IdleArcHelper — Все 5 классов!): "
+    "1) Переименование в IdleArcHelper + новая иконка 5 классов на 5-конечной звезде + поддержка Воина, Лучника, Мага, Разбойника и Друида (все 90 навыков, стойки, камни и расчёты статов); "
+    "2) Полная Сумка предметов (/api/inventory) и Мешок самоцветов (/api/gems) с фильтром «Уничтожить / Оставить» строго по неизменяемому Бонусу дропа под твой класс (без браковки перекручиваемых аффиксов!); "
+    "3) Умный оптимизатор аффиксов питомцев с объяснением механики 2 слоёв, динамическим подбором топ-4 от твоего уровня, учётом капа Доп. убийства >= 100%, потолка ур. 1 и связки с твоими камнями!"
 )
 
 
@@ -236,7 +235,8 @@ def build_apk() -> Path:
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        apk_filename = f"IdleArc-DruidHelper-v{ver_name}.apk"
+        apk_filename = f"IdleArcHelper-v{ver_name}.apk"
+        legacy_ota_filename = f"IdleArc-DruidHelper-v{ver_name}.apk"
         final_apk = OUT_DIR / apk_filename
         subprocess.check_call([
             DEFAULT_JAVA, "-jar", apksigner_jar, "sign",
@@ -251,6 +251,8 @@ def build_apk() -> Path:
             "--out", str(final_apk),
             str(aligned_apk),
         ])
+        # Сохраняем зеркальную копию с прежним префиксом, чтобы клиенты v3.1.0 обновились по воздуху в 1 клик
+        shutil.copy2(final_apk, OUT_DIR / legacy_ota_filename)
 
         verify_out = subprocess.check_output([
             DEFAULT_JAVA, "-jar", apksigner_jar, "verify", "--verbose", str(final_apk)

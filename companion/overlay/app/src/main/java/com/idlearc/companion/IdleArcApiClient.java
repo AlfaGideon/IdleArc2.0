@@ -33,6 +33,8 @@ public class IdleArcApiClient {
 
     private static volatile Map<String, Object> cachedDashboard = null;
     private static volatile Map<String, Object> cachedGameConfig = null;
+    private static volatile List<Map<String, Object>> cachedInventoryItems = new ArrayList<>();
+    private static volatile Map<String, Object> cachedGemsData = null;
     private static volatile long lastSyncTimeMs = 0L;
 
     public interface ApiCallback {
@@ -70,6 +72,8 @@ public class IdleArcApiClient {
 
     public static void clearCredentials(Context ctx) {
         cachedDashboard = null;
+        cachedInventoryItems = new ArrayList<>();
+        cachedGemsData = null;
         lastSyncTimeMs = 0L;
         if (ctx == null) return;
         SharedPreferences sp = ctx.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE);
@@ -82,7 +86,12 @@ public class IdleArcApiClient {
         }
         SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
         if (cp != null) {
-            cp.edit().putString("dashboard_json", "").putLong("sync_ts", 0L).apply();
+            cp.edit()
+              .putString("dashboard_json", "")
+              .putString("gems_json", "")
+              .putInt("inv_page_cnt", 0)
+              .putLong("sync_ts", 0L)
+              .apply();
         }
     }
 
@@ -94,11 +103,24 @@ public class IdleArcApiClient {
         return cachedGameConfig;
     }
 
+    public static List<Map<String, Object>> getCachedInventoryItems() {
+        return cachedInventoryItems;
+    }
+
+    public static Map<String, Object> getCachedGemsData() {
+        return cachedGemsData;
+    }
+
+    public static void setCachedInventoryAndGems(List<Map<String, Object>> invItems, Map<String, Object> gemsData) {
+        cachedInventoryItems = invItems != null ? invItems : new ArrayList<Map<String, Object>>();
+        cachedGemsData = gemsData;
+    }
+
     public static long getLastSyncTimeMs() {
         return lastSyncTimeMs;
     }
 
-    /** Мгновенно подгружает последний сохранённый слепок /api/dashboard из локального кэша устройства */
+    /** Мгновенно подгружает последний сохранённый слепок /api/dashboard, /api/inventory и /api/gems из локального кэша */
     public static boolean ensureCacheLoaded(Context ctx, DruidProfile profile) {
         if (cachedDashboard != null) return true;
         if (ctx == null) return false;
@@ -113,6 +135,19 @@ public class IdleArcApiClient {
         String rawCfg = cp.getString("game_config_json", "");
         if (rawCfg != null && !rawCfg.isEmpty()) {
             cachedGameConfig = SimpleJson.parseObject(rawCfg);
+        }
+        String rawGems = cp.getString("gems_json", "");
+        if (rawGems != null && !rawGems.isEmpty()) {
+            cachedGemsData = SimpleJson.parseObject(rawGems);
+        }
+        int pageCnt = cp.getInt("inv_page_cnt", 0);
+        if (pageCnt > 0) {
+            List<Map<String, Object>> loadedInv = new ArrayList<>();
+            for (int pIdx = 1; pIdx <= pageCnt; pIdx++) {
+                String pJson = cp.getString("inv_page_" + pIdx, "");
+                extractInventoryPageItems(SimpleJson.parseObject(pJson), loadedInv);
+            }
+            cachedInventoryItems = loadedInv;
         }
         if (profile != null) {
             applyDashboardToProfile(parsed, profile);
@@ -168,6 +203,40 @@ public class IdleArcApiClient {
                     lastSyncTimeMs = System.currentTimeMillis();
                     applyDashboardToProfile(dash, profile);
                     SnapshotHistoryTracker.onNewDashboardSynced(ctx, prevDash, dash);
+                    // Дополнительно загружаем полный Инвентарь вещей (/api/inventory?page=1..N) и Мешок самоцветов (/api/gems)
+                    String gemsJson = "";
+                    try {
+                        gemsJson = fetchAuthenticatedGetJson(token, "/api/gems");
+                        Map<String, Object> gMap = SimpleJson.parseObject(gemsJson);
+                        if (gMap != null && !gMap.isEmpty()) {
+                            cachedGemsData = gMap;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    List<String> rawInvPages = new ArrayList<>();
+                    List<Map<String, Object>> allInvItems = new ArrayList<>();
+                    try {
+                        String p1Json = fetchAuthenticatedGetJson(token, "/api/inventory?page=1");
+                        Map<String, Object> p1Map = SimpleJson.parseObject(p1Json);
+                        if (p1Map != null && !p1Map.isEmpty()) {
+                            rawInvPages.add(p1Json);
+                            extractInventoryPageItems(p1Map, allInvItems);
+                            Map<String, Object> pag = SimpleJson.asMap(p1Map.get("characterItemsPaginated"));
+                            int lastPage = pag != null ? Math.min(12, SimpleJson.intVal(pag, "last_page", 1)) : 1;
+                            for (int pg = 2; pg <= lastPage; pg++) {
+                                String pgJson = fetchAuthenticatedGetJson(token, "/api/inventory?page=" + pg);
+                                Map<String, Object> pgMap = SimpleJson.parseObject(pgJson);
+                                if (pgMap != null) {
+                                    rawInvPages.add(pgJson);
+                                    extractInventoryPageItems(pgMap, allInvItems);
+                                }
+                            }
+                            cachedInventoryItems = allInvItems;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
                     if (ctx != null) {
                         profile.save(ctx);
                         SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
@@ -175,6 +244,15 @@ public class IdleArcApiClient {
                             SharedPreferences.Editor ed = cp.edit()
                                     .putString("dashboard_json", dashJson)
                                     .putLong("sync_ts", lastSyncTimeMs);
+                            if (!gemsJson.isEmpty()) {
+                                ed.putString("gems_json", gemsJson);
+                            }
+                            if (!rawInvPages.isEmpty()) {
+                                ed.putInt("inv_page_cnt", rawInvPages.size());
+                                for (int i = 0; i < rawInvPages.size(); i++) {
+                                    ed.putString("inv_page_" + (i + 1), rawInvPages.get(i));
+                                }
+                            }
                             if (cachedGameConfig == null) {
                                 try {
                                     String cfgJson = fetchPublicGameConfigJson();
@@ -241,14 +319,18 @@ public class IdleArcApiClient {
     }
 
     public static String fetchDashboardJson(String bearerToken) throws Exception {
-        URL url = new URL(API_BASE + "/api/dashboard");
+        return fetchAuthenticatedGetJson(bearerToken, "/api/dashboard");
+    }
+
+    public static String fetchAuthenticatedGetJson(String bearerToken, String apiPath) throws Exception {
+        URL url = new URL(API_BASE + apiPath);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(25000);
         conn.setRequestProperty("Accept", "application/json");
         conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
-        conn.setRequestProperty("User-Agent", "IdleArc-DruidHelper/2.2");
+        conn.setRequestProperty("User-Agent", "IdleArcHelper/4.0");
 
         int code = conn.getResponseCode();
         String respText = readAll(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream());
@@ -258,9 +340,20 @@ public class IdleArcApiClient {
             throw new AuthExpiredException("Сессия API истекла (HTTP " + code + ") — проверь логин и пароль.");
         }
         if (code != 200) {
-            throw new Exception("Ошибка загрузки /api/dashboard: HTTP " + code);
+            throw new Exception("Ошибка загрузки " + apiPath + ": HTTP " + code);
         }
         return respText;
+    }
+
+    private static void extractInventoryPageItems(Map<String, Object> pageRoot, List<Map<String, Object>> out) {
+        if (pageRoot == null || out == null) return;
+        Map<String, Object> pag = SimpleJson.asMap(pageRoot.get("characterItemsPaginated"));
+        List<Object> data = pag != null ? SimpleJson.asList(pag.get("data")) : SimpleJson.asList(pageRoot.get("items"));
+        if (data == null) return;
+        for (Object obj : data) {
+            Map<String, Object> item = SimpleJson.asMap(obj);
+            if (item != null) out.add(item);
+        }
     }
 
     public static String fetchPublicGameConfigJson() throws Exception {
@@ -295,6 +388,10 @@ public class IdleArcApiClient {
      */
     public static void applyDashboardToProfile(Map<String, Object> d, DruidProfile p) {
         if (d == null || p == null) return;
+
+        int cid = SimpleJson.intVal(d, "characterClassId", 0);
+        String cname = SimpleJson.str(d, "characterClassName", "");
+        p.detectedClassId = HeroClassProfile.HeroClass.fromIdOrName(cid, cname).id;
 
         p.charLevel = Math.max(1, SimpleJson.intVal(d, "level", p.charLevel));
         p.gearScore = Math.max(0, SimpleJson.intVal(d, "gear_score", p.gearScore));

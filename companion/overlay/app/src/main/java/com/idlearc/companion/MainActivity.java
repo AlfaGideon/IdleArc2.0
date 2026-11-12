@@ -18,6 +18,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -26,7 +27,7 @@ import android.widget.Toast;
 import java.util.Map;
 
 /**
- * Главный экран Druid Helper v3.1 (Pure API + Визуальные карточки + Системный будильник):
+ * Главный экран IdleArcHelper v4.0 (Все 5 классов + Полная Сумка по бонусу дропа + Советник аффиксов петов):
  * 7 интерактивных вкладок карточек без сырых JSON/GSON-ключей и без захвата экрана.
  */
 public class MainActivity extends Activity {
@@ -35,6 +36,7 @@ public class MainActivity extends Activity {
     private TextView syncStatusTv;
     private Button syncNowBtn;
     private Button overlayBtn;
+    private Button classPickerBtn;
     private LinearLayout cardsContainer;
     private HorizontalScrollView slotChipScroll;
     private final Button[] modeButtons = new Button[DruidProfile.BuildMode.values().length];
@@ -68,17 +70,24 @@ public class MainActivity extends Activity {
         root.setPadding(pad, dp(10), pad, dp(22));
         rootScroll.addView(root);
 
-        // 1. Фирменная шапка v3.1
-        LinearLayout headerCard = DashboardCardRenderer.makeCard(this, "#0F1B26", "#29B6F6");
+        // 1. Фирменная шапка IdleArcHelper v4.0 с медальоном 5 классов (5-конечная звезда)
+        LinearLayout headerCard = DashboardCardRenderer.makeCard(this, "#0F1B26", "#FFD54F");
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        ImageView medallionIv = new ImageView(this);
+        medallionIv.setImageResource(R.drawable.ic_app_medallion);
+        LinearLayout.LayoutParams medLp = new LinearLayout.LayoutParams(dp(38), dp(38));
+        medLp.rightMargin = dp(8);
+        medallionIv.setLayoutParams(medLp);
+        titleRow.addView(medallionIv);
+
         TextView title = new TextView(this);
-        title.setText("🌿 Druid Helper v" + OtaUpdater.getCurrentVersionName(this));
+        title.setText("IdleArcHelper v" + OtaUpdater.getCurrentVersionName(this));
         title.setTextSize(18f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.parseColor("#69F0AE"));
+        title.setTextColor(Color.parseColor("#FFD54F"));
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         titleRow.addView(title);
 
@@ -130,19 +139,33 @@ public class MainActivity extends Activity {
         topBtns.addView(overlayBtn, weightLp(0));
         headerCard.addView(topBtns);
 
-        Button otaBtn = DashboardCardRenderer.pillButton(
-                this, "⬇️ Проверить обновление по воздуху (OTA)", "#132230", "#80DEEA");
-        LinearLayout.LayoutParams otaLp = new LinearLayout.LayoutParams(
+        LinearLayout subTopRow = new LinearLayout(this);
+        subTopRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams subTopLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        otaLp.topMargin = dp(6);
-        otaBtn.setLayoutParams(otaLp);
+        subTopLp.topMargin = dp(6);
+        subTopRow.setLayoutParams(subTopLp);
+
+        classPickerBtn = DashboardCardRenderer.pillButton(
+                this, "🌟 Класс: Авто", "#221C35", "#FFE082");
+        classPickerBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showClassPickerDialog();
+            }
+        });
+        subTopRow.addView(classPickerBtn, weightLp(5));
+
+        Button otaBtn = DashboardCardRenderer.pillButton(
+                this, "⬇️ Проверить OTA", "#132230", "#80DEEA");
         otaBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 runOtaCheck(true);
             }
         });
-        headerCard.addView(otaBtn);
+        subTopRow.addView(otaBtn, weightLp(0));
+        headerCard.addView(subTopRow);
         root.addView(headerCard);
 
         // 2. Переключатель цели расчёта (Пуш / Фарм / Босс)
@@ -268,7 +291,7 @@ public class MainActivity extends Activity {
             @Override
             public void onUpdateAvailable(final OtaUpdater.ReleaseInfo latest, int currentCode, String currentName) {
                 new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("🚀 Доступен Druid Helper v" + latest.versionName)
+                        .setTitle("🚀 Доступен IdleArcHelper v" + latest.versionName)
                         .setMessage("Текущая версия: v" + currentName + "\nНовая версия: v" + latest.versionName
                                 + (latest.changelog.isEmpty() ? "" : ("\n\nЧто нового:\n" + latest.changelog)))
                         .setPositiveButton("Скачать и обновить", new DialogInterface.OnClickListener() {
@@ -430,18 +453,50 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void showClassPickerDialog() {
+        HeroClassProfile.HeroClass det = HeroClassProfile.HeroClass.fromIdOrName(profile.detectedClassId, "");
+        String[] items = {
+            "✨ Автоматически из аккаунта API (" + det.icon + " " + det.ruName + ")",
+            "⚔️ Воин (Сила / Оплот / Возмездие)",
+            "🏹 Лучник (Меткость / Охота / Зверолов)",
+            "🔮 Маг (Тайная магия / Разрушение / Хаос)",
+            "🗡️ Разбойник (Убийца / Тень / Вор)",
+            "🌿 Друид (Ложа / Туннели / Питомцы)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("🌟 Выбери класс для расчёта Сумки, Шмота и Камней")
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        profile.overrideClassId = which; // 0 = Авто, 1..5 = конкретный класс
+                        profile.save(MainActivity.this);
+                        refreshAllViews();
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
     private void refreshAllViews() {
         overlayBtn.setText(OverlayService.isRunning() ? "⏹ Скрыть" : "📌 Виджет");
         Map<String, Object> dash = IdleArcApiClient.getCachedDashboard();
         Map<String, Object> cfg = IdleArcApiClient.getCachedGameConfig();
 
+        HeroClassProfile.HeroClass effCls = HeroClassProfile.resolveHeroClass(dash, profile);
+        if (classPickerBtn != null) {
+            String prefix = (profile.overrideClassId >= 1 && profile.overrideClassId <= 5) ? "Класс: " : "Авто: ";
+            classPickerBtn.setText("🌟 " + prefix + effCls.icon + " " + effCls.ruName);
+        }
+
         // Статус синхронизации
         if (dash != null && !dash.isEmpty()) {
             long ageSec = Math.max(0L, (System.currentTimeMillis() - IdleArcApiClient.getLastSyncTimeMs()) / 1000L);
             String ageText = ageSec < 60 ? (ageSec + " сек назад") : ((ageSec / 60L) + " мин назад");
-            syncStatusTv.setText("🌐 Синхронизировано: " + SimpleJson.str(dash, "name", "Герой")
-                    + " (Ур. " + profile.charLevel + " · GS " + SimpleJson.intVal(dash, "gear_score", 0)
-                    + ") · " + ageText);
+            int bagCnt = IdleArcApiClient.getCachedInventoryItems() != null ? IdleArcApiClient.getCachedInventoryItems().size() : 0;
+            syncStatusTv.setText("🌐 " + SimpleJson.str(dash, "name", "Герой")
+                    + " · " + effCls.icon + " " + effCls.ruName
+                    + " Ур." + profile.charLevel
+                    + " · Сумка: " + bagCnt + " вещ. · " + ageText);
         } else if (IdleArcApiClient.hasSavedCredentials(this)) {
             syncStatusTv.setText("🔑 Аккаунт подключён (" + IdleArcApiClient.getSavedEmail(this) + ") — нажми «🔄 Обновить API»");
         } else {

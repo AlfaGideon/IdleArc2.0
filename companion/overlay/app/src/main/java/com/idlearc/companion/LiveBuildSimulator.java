@@ -246,8 +246,17 @@ public class LiveBuildSimulator {
                 }
                 s.petDmgAdditivePct = Math.max(fromStatsPet, Math.max(fromMultPet, Math.min(1100.0, scale * 18.0)));
             }
-            s.petShareOfDps = p.petDamageMultMillions >= 0.01 ? 0.985
-                    : (s.petDmgAdditivePct >= 300.0 ? 0.92 : 0.75);
+            int effCls = p.effectiveClassId();
+            if (effCls == 5) {
+                s.petShareOfDps = p.petDamageMultMillions >= 0.01 ? 0.985
+                        : (s.petDmgAdditivePct >= 300.0 ? 0.92 : 0.75);
+            } else if (effCls == 2) {
+                // Лучник: прямой урон героя + ветка Зверолова (Альфа-удар удваивает обоих)
+                s.petShareOfDps = 0.22;
+            } else {
+                // Воин (1), Маг (3), Разбойник (4): 95%+ урона наносят прямые удары и проки самого героя
+                s.petShareOfDps = 0.05;
+            }
 
             s.critChancePct = p.critChance;
             s.critDamagePct = p.critDamage;

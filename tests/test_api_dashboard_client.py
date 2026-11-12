@@ -229,6 +229,63 @@ public class ApiClientSuite {
         SnapshotHistoryTracker.computeBeforeAfterDiff(dash, newerDash);
         check(SnapshotHistoryTracker.getLastDiffSummary().contains("+10.00%"), "Before/After diff detects +10% pet hit");
 
+        // === v4.0.0: Тесты всех 5 классов, 90 навыков, Сумки по бонусу дропа и Советника петов ===
+        for (int sid = 1; sid <= 90; sid++) {
+            check(!HeroClassProfile.skillNameRu(sid, "").isEmpty(), "Skill RU #" + sid);
+        }
+        check(HeroClassProfile.HeroClass.fromIdOrName(1, "") == HeroClassProfile.HeroClass.WARRIOR, "Warrior id=1");
+        check(HeroClassProfile.HeroClass.fromIdOrName(3, "Mage") == HeroClassProfile.HeroClass.MAGE, "Mage id=3");
+
+        // Сумка предметов: проверка оценки СТРОГО по drop_bonus_type под класс!
+        java.util.List<Map<String, Object>> testInv = new java.util.ArrayList<>();
+        // 1) Перчатки с companions +31.8% (сильнее любого среднего ролла) и мусорными аффиксами -> ОСТАВИТЬ ПОД ОСНОВУ на Друиде!
+        testInv.add(SimpleJson.parseObject("{\\"id\\":101,\\"name\\":\\"Дикие перчатки\\",\\"slot\\":\\"gloves\\",\\"type\\":\\"gloves\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"companions\\",\\"drop_bonus_value\\":31.8}"));
+        // 2) Перчатки с fierce +25.0% -> УНИЧТОЖИТЬ на Друиде, но ОСТАВИТЬ на Маге/Воине!
+        testInv.add(SimpleJson.parseObject("{\\"id\\":102,\\"name\\":\\"Перчатки ярости\\",\\"slot\\":\\"gloves\\",\\"type\\":\\"gloves\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"fierce\\",\\"drop_bonus_value\\":25.0}"));
+        // 3) Оружие только для Воина (allowed_classes=[1]) -> УНИЧТОЖИТЬ на Друиде!
+        testInv.add(SimpleJson.parseObject("{\\"id\\":103,\\"name\\":\\"Двуручный меч\\",\\"slot\\":\\"main_hand\\",\\"type\\":\\"weapon\\",\\"tier\\":6,\\"drop_bonus_type\\":\\"companions\\",\\"drop_bonus_value\\":59.0,\\"allowed_classes\\":[1]}"));
+
+        p.overrideClassId = 5; // Друид
+        BagAndPetAdvisor.InventoryAuditSummary druidBag = BagAndPetAdvisor.evaluateInventoryItems(dash, testInv, p);
+        check(druidBag.totalItems >= 3, "3+ items in bag (inv + newLoot)");
+        boolean keptCompanionsOnDruid = false;
+        boolean destroyedFierceOnDruid = false;
+        boolean destroyedWrongClass = false;
+        for (BagAndPetAdvisor.BagItemEntry e : druidBag.entries) {
+            if ("Дикие перчатки".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.KEEP_UPGRADE_BASE) keptCompanionsOnDruid = true;
+            if ("Перчатки ярости".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) destroyedFierceOnDruid = true;
+            if ("Двуручный меч".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) destroyedWrongClass = true;
+        }
+        check(keptCompanionsOnDruid, "Druid keeps higher companions drop bonus regardless of rerollable affixes");
+        check(destroyedFierceOnDruid, "Druid salvages fierce drop bonus");
+        check(destroyedWrongClass, "Druid salvages Warrior-only weapon");
+
+        // Переключаем класс на Мага (3): теперь fierce = БИС (ОСТАВИТЬ), а companions = УНИЧТОЖИТЬ!
+        p.overrideClassId = 3;
+        BagAndPetAdvisor.InventoryAuditSummary mageBag = BagAndPetAdvisor.evaluateInventoryItems(dash, testInv, p);
+        boolean keptFierceOnMage = false;
+        boolean destroyedCompanionsOnMage = false;
+        for (BagAndPetAdvisor.BagItemEntry e : mageBag.entries) {
+            if ("Перчатки ярости".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.KEEP_UPGRADE_BASE) keptFierceOnMage = true;
+            if ("Дикие перчатки".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY) destroyedCompanionsOnMage = true;
+        }
+        check(keptFierceOnMage, "Mage keeps fierce drop bonus");
+        check(destroyedCompanionsOnMage, "Mage salvages companions drop bonus");
+        p.overrideClassId = 0;
+
+        // Мешок самоцветов (/api/gems) и Советник аффиксов петов при extraKill >= 100%
+        Map<String, Object> fakeGems = SimpleJson.parseObject("{\\"bag_cap\\":100,\\"bag\\":["
+            + "{\\"id\\":1,\\"family\\":\\"amber\\",\\"rarity\\":5,\\"rarity_slug\\":\\"flawless\\",\\"quality\\":92,\\"pristine\\":false,\\"secondaries\\":[]},"
+            + "{\\"id\\":2,\\"family\\":\\"lapis\\",\\"rarity\\":3,\\"rarity_slug\\":\\"polished\\",\\"quality\\":84,\\"pristine\\":false,\\"secondaries\\":[]},"
+            + "{\\"id\\":3,\\"family\\":\\"garnet\\",\\"rarity\\":4,\\"rarity_slug\\":\\"brilliant\\",\\"quality\\":72,\\"pristine\\":false,\\"secondaries\\":[]}"
+            + "]}");
+        BagAndPetAdvisor.GemBagAuditSummary gemBag = BagAndPetAdvisor.evaluateGemBag(dash, fakeGems, p);
+        check(gemBag.bagCount == 3 && gemBag.countAmber == 1 && gemBag.countLapis == 1, "Gem bag parsed");
+
+        p.extraKillChance = 112.0;
+        BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(dash, fakeGems, p);
+        check(petAdv.gemSynergyNotes.get(0).contains("КАП ДОП. УБИЙСТВА ЗАКРЫТ"), "Detects extra kill >= 100% cap on pets");
+
         System.out.println("API_DASHBOARD_SUITE_OK");
     }
 }
@@ -250,6 +307,8 @@ public class ApiClientSuite {
                 str(SRC_DIR / "ScreenAnalyzer.java"),
                 str(SRC_DIR / "IdleArcApiClient.java"),
                 str(SRC_DIR / "RuGameDictionary.java"),
+                str(SRC_DIR / "HeroClassProfile.java"),
+                str(SRC_DIR / "BagAndPetAdvisor.java"),
                 str(SRC_DIR / "SnapshotHistoryTracker.java"),
                 str(SRC_DIR / "RadarTimeParser.java"),
                 str(SRC_DIR / "ApiFeatureAnalyzers.java"),

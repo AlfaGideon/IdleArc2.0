@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.idlearc.companion"
-    android:versionCode="310"
-    android:versionName="3.1.0">
+    android:versionCode="400"
+    android:versionName="4.0.0">
 
     <uses-sdk
         android:minSdkVersion="24"
@@ -20,6 +20,7 @@
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
