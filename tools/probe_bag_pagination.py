@@ -28,7 +28,7 @@ def main():
             "password": os.environ["IDLEARC_PASSWORD"],
             "device_name": "IdleArcProbe",
         }).encode("utf-8"),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "IdleArcHelper/4.0"},
         method="POST",
     )
     with urllib.request.urlopen(login_req, timeout=15) as r:
