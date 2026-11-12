@@ -1,64 +1,68 @@
 #!/usr/bin/env python3
 import json
 import os
-import re
-import traceback
 import urllib.request
 
 BASE = "https://idlearc.com"
 
-def req_text(path_or_url):
-    url = path_or_url if path_or_url.startswith("http") else (BASE + path_or_url)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        return r.read().decode("utf-8", errors="ignore")
-
-def req_json(path_or_url, method="GET", token=None, body=None):
-    url = path_or_url if path_or_url.startswith("http") else (BASE + path_or_url)
-    headers = {"Accept": "application/json", "User-Agent": "IdleArcProbe/1.0"}
-    data = None
+def raw_req(path, method="GET", token=None, body=None, content_type="application/json"):
+    url = BASE + path
+    headers = {"Accept": "application/json", "User-Agent": "IdleArcHelper/4.0"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    data = None
     if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = content_type
+        data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def main():
-    try:
-        html = req_text("/login")
-        scripts = re.findall(r'(?:src|href)="([^"]*?/build/assets/[^"]+\.js)"', html)
-        found = {"scripts": scripts}
-        # Fetch app-*.js and look for all chunk filenames + all /api/ routes!
-        all_chunks = set(scripts)
-        for s in list(scripts)[:6]:
-            js = req_text(s)
-            more = re.findall(r'assets/[A-Za-z0-9_\-\.]+\.js', js)
-            for m in more:
-                if any(w in m.lower() for w in ["inv", "item", "bag", "equip", "char"]):
-                    all_chunks.add("/build/" + m)
-            apis = sorted(set(re.findall(r'/api/[A-Za-z0-9_/\-]+', js)))
-            if apis:
-                found[s] = apis[:40]
+    tok = raw_req("/api/login", method="POST", body={
+        "email": os.environ["IDLEARC_EMAIL"],
+        "password": os.environ["IDLEARC_PASSWORD"],
+        "device_name": "IdleArcSchemaProbe"
+    })["token"]
 
-        chunk_details = {}
-        for ch in sorted(all_chunks):
-            if ch in scripts:
-                continue
-            try:
-                cjs = req_text(ch)
-                apis = sorted(set(re.findall(r'/api/[A-Za-z0-9_/\-\?\=\&]+', cjs)))
-                pag_ctx = re.findall(r'.{0,60}(?:characterItemsPaginated|inventory\?|items\?|page=).{0,80}', cjs)
-                if apis or pag_ctx:
-                    chunk_details[ch] = {"apis": apis[:30], "ctx": pag_ctx[:8]}
-            except Exception as ce:
-                chunk_details[ch] = str(ce)[:40]
+    p1 = raw_req("/api/inventory", token=tok)
+    p1_id = p1["characterItemsPaginated"]["data"][0]["id"]
 
-        print("::notice::JS_CHUNKS=" + json.dumps({"found": found, "chunks": chunk_details}, ensure_ascii=False)[:1800])
-    except Exception:
-        print("::notice::ERR=" + traceback.format_exc()[-1000:].replace("\n", " | "))
+    results = {"p1_first_id": p1_id}
+    trials = [
+        ("GET_json_body_page2", "/api/inventory?page=2", "GET", {"page": 2}, "application/json"),
+        ("GET_form_body_page2", "/api/inventory?page=2", "GET", b"page=2", "application/x-www-form-urlencoded"),
+        ("POST_page2", "/api/inventory", "POST", {"page": 2}, "application/json"),
+        ("GET_slot_gloves", "/api/inventory?slot=gloves&type=gloves", "GET", None, "application/json"),
+        ("GET_json_slot_gloves", "/api/inventory", "GET", {"slot": "gloves", "type": "gloves", "per_page": 100}, "application/json"),
+        ("ep_character_items", "/api/character-items?page=2", "GET", None, "application/json"),
+        ("ep_items", "/api/items?page=2", "GET", None, "application/json"),
+        ("ep_forge", "/api/forge", "GET", None, "application/json"),
+        ("ep_crafting", "/api/crafting", "GET", None, "application/json"),
+        ("ep_presets", "/api/presets", "GET", None, "application/json"),
+        ("ep_equipment", "/api/equipment", "GET", None, "application/json"),
+    ]
+
+    for name, path, meth, body, ctype in trials:
+        try:
+            r = raw_req(path, method=meth, token=tok, body=body, content_type=ctype)
+            if isinstance(r, dict) and "characterItemsPaginated" in r:
+                cp = r["characterItemsPaginated"]
+                d = cp.get("data", [])
+                results[name] = {"cur": cp.get("current_page"), "cnt": len(d), "id0": d[0]["id"] if d else None}
+            elif isinstance(r, dict):
+                # check if any key holds a list of items > 10!
+                summary = {}
+                for k, v in r.items():
+                    if isinstance(v, list):
+                        summary[k] = f"list({len(v)})"
+                    elif isinstance(v, dict) and "data" in v:
+                        summary[k] = f"pag(cur={v.get('current_page')},len={len(v.get('data',[]))})"
+                results[name] = summary or list(r.keys())[:8]
+        except Exception as e:
+            results[name] = str(e)[:45]
+
+    print("::notice::TRIAL_RESULTS=" + json.dumps(results, ensure_ascii=False)[:1850])
 
 if __name__ == "__main__":
     main()
