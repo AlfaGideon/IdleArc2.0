@@ -1,0 +1,17 @@
+name: Harmony read-only diagnostics
+on:
+  push:
+    branches: ["arena/**"]
+    paths: ["tools/probe_harmony_readonly.py", ".github/workflows/probe-harmony.yml"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: pip install -q curl_cffi
+      - run: python3 tools/probe_harmony_readonly.py
+        env:
+          IDLEARC_EMAIL: ${{ secrets.IDLEARC_EMAIL }}
+          IDLEARC_PASSWORD: ${{ secrets.IDLEARC_PASSWORD }}
