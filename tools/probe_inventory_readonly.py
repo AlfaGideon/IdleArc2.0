@@ -120,14 +120,12 @@ try:
         for match in re.findall(rb'[ -~]{4,160}', blob):
             text = match.decode('ascii')
             low = text.lower()
-            if any(w in low for w in ('inventorypage', 'inventory_page', 'itemspage', 'items_page',
-                                      'characteritemspaginated', 'bosscooldown', 'boss_cooldown',
-                                      'bossfight', 'boss_fight', '/inventory')):
-                if len(text) <= 130 and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
+            if any(w in low for w in ('boss', 'inventory', 'itemspage', 'items_page', 'characteritems', 'page=')):
+                if len(text) <= 100 and re.fullmatch(r'[a-zA-Z0-9_./?=&:-]+', text) and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
                     strings.add(text)
         print('::notice::APP_ROUTES=' + json.dumps(sorted(routes))[:1800])
         matches = sorted(strings)
-        for i in range(0, min(len(matches), 150), 12):
+        for i in range(0, min(len(matches), 360), 12):
             print('::notice::APP_STRINGS=' + json.dumps(matches[i:i+12])[:1800])
 except Exception as exc:
     print('::notice::APP_SCAN_ERROR=' + type(exc).__name__)
