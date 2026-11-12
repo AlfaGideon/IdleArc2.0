@@ -80,9 +80,13 @@ def timing_keys(value, prefix='', depth=0):
         for val in value[:5]:
             out.extend(timing_keys(val, prefix + '[]', depth + 1))
     return sorted(set(out))
-for path in ('/api/boss-fight', '/api/boss-fight/status', '/api/boss', '/api/boss/status'):
-    data = get(path)
-    print('::notice::BOSS_ROUTE=' + json.dumps({'path': path, 'available': data is not None, 'keys': timing_keys(data)}, separators=(',', ':'))[:1800])
+boss = get('/api/boss-fight/status')
+if isinstance(boss, dict):
+    safe = {k: v for k, v in boss.items() if isinstance(v, (bool, int, float)) and any(w in k.lower() for w in ('time', 'second', 'cooldown', 'remaining', 'available', 'can_fight'))}
+    print('::notice::BOSS_STATUS=' + json.dumps({'keys': list(boss.keys()), 'timing': safe}, separators=(',', ':')))
+dash = get('/api/dashboard')
+if isinstance(dash, dict):
+    print('::notice::DASH_INVENTORY_KEYS=' + json.dumps({k: (len(v) if isinstance(v, list) else type(v).__name__) for k,v in dash.items() if 'item' in k.lower() or 'loot' in k.lower() or 'inventory' in k.lower()}))
 
 # Inspect public app package for actual route strings, without persisting its contents.
 import io
@@ -120,12 +124,12 @@ try:
         for match in re.findall(rb'[ -~]{4,160}', blob):
             text = match.decode('ascii')
             low = text.lower()
-            if any(w in low for w in ('boss', 'inventory', 'itemspage', 'items_page', 'characteritems', 'page=')):
+            if any(w in low for w in ('inventory', 'itemspage', 'items_page', 'characteritems', 'page=')):
                 if len(text) <= 100 and re.fullmatch(r'[a-zA-Z0-9_./?=&:-]+', text) and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
                     strings.add(text)
         print('::notice::APP_ROUTES=' + json.dumps(sorted(routes))[:1800])
-        matches = sorted(strings, key=lambda x: (not bool(re.search(r'(?i)(boss.*(cool|ready|time|remain|fight)|inventory|characteritems)', x)), x.lower()))
-        for i in range(0, min(len(matches), 48), 12):
+        matches = sorted(strings, key=str.lower)
+        for i in range(0, min(len(matches), 84), 12):
             print('::notice::APP_STRINGS=' + json.dumps(matches[i:i+12])[:1800])
 except Exception as exc:
     print('::notice::APP_SCAN_ERROR=' + type(exc).__name__)
