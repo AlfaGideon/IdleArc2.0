@@ -1,39 +1,29 @@
 #!/usr/bin/env python3
-"""Read-only diagnostic of resource fields; no tokens or balances in output."""
-import json, os, time
+import json, os
 from curl_cffi import requests
-s=requests.Session(impersonate='chrome124'); base='https://idlearc.com'
+s=requests.Session(impersonate='chrome124');base='https://idlearc.com'
 r=s.post(base+'/api/login',json={'email':os.environ['IDLEARC_EMAIL'],'password':os.environ['IDLEARC_PASSWORD'],'device_name':'IdleArcHelper diagnostics'},headers={'Accept':'application/json'},timeout=20)
-if r.status_code not in (200,201) or not r.json().get('token'): raise RuntimeError('Login failed')
+if r.status_code not in (200,201) or not r.json().get('token'):raise RuntimeError('Login failed')
 h={'Accept':'application/json','Authorization':'Bearer '+r.json()['token']}
-def get(path):
- r=s.get(base+path,headers=h,timeout=20)
- if r.status_code!=200: return None
- return r.json()
-def schema(v, p='', depth=0):
+def scan(v,p='',depth=0):
+ if depth>5:return []
  out=[]
- if depth>3 or not isinstance(v,dict): return out
- for k,x in v.items():
-  path=p+'.'+k
-  if any(z in k.lower() for z in ('gold','dust','shard','ruby','rubies','exp','xp','progress','session','earning','gain')):
-   out.append([path, type(x).__name__, list(x.keys()) if isinstance(x,dict) and len(x)<20 else None])
-  if isinstance(x,dict):out.extend(schema(x,path,depth+1))
+ if isinstance(v,dict):
+  for k,x in v.items():
+   path=p+'.'+k
+   if any(w in k.lower() for w in ('earned','lifetime','total_gold','gold_earned','gold_gained','goldgained','goldEarned','farm','session','total_xp','total_exp')):
+    out.append([path,type(x).__name__])
+   if isinstance(x,(dict,list)):out.extend(scan(x,path,depth+1))
+ elif isinstance(v,list):
+  for x in v[:10]:out.extend(scan(x,p+'[]',depth+1))
  return out
-first=get('/api/dashboard')
-for p in ('/api/dashboard','/api/gems','/api/pets','/api/materials'):
- d=first if p=='/api/dashboard' else get(p)
- found=schema(d)
- for i in range(0,min(len(found),90),30):
-  print('::notice::FARM_SCHEMA='+json.dumps({'path':p,'fields':found[i:i+30]},separators=(',',':'))[:1800])
-if first is not None:
- lp=first.get('levelProgress')
- print('::notice::FARM_LEVEL_PROGRESS='+json.dumps({'type':type(lp).__name__,'value':lp if isinstance(lp,(int,float,str,dict)) else None},separators=(',',':'))[:1200])
- time.sleep(35)
- second=get('/api/dashboard')
- if isinstance(second,dict):
-  diffs={}
-  for k in ('goldAmount','goldAmountStr','gemDust','petShardsAmount','rubyAmount','level','levelProgress'):
-   a,b=first.get(k),second.get(k)
-   try: diffs[k]={'exists':k in first and k in second,'changed':float(a)!=float(b),'negative':float(b)<float(a)}
-   except (TypeError,ValueError):diffs[k]={'exists':k in first and k in second,'type':type(b).__name__}
-  print('::notice::FARM_SNAPSHOTS='+json.dumps(diffs,separators=(',',':')))
+for p in ('/api/dashboard','/api/statistics','/api/stats','/api/character','/api/achievements'):
+ try:
+  r=s.get(base+p,headers=h,timeout=20);d=r.json() if r.status_code==200 else None
+  extra={}
+  if p=='/api/dashboard' and isinstance(d,dict):
+   for k in ('goldAmountStr','gemDustStr','petShardsAmountStr','rubyAmountStr'):
+    try:float(d[k]);extra[k]='numeric string'
+    except (KeyError,TypeError,ValueError):extra[k]='missing or nonnumeric'
+  print('::notice::FARM_TOTALS='+json.dumps({'path':p,'status':r.status_code,'keys':list(d.keys())[:35] if isinstance(d,dict) and p!='/api/dashboard' else [],'fields':scan(d)[:30],'exact':extra},separators=(',',':'))[:1800])
+ except Exception as e:print('::notice::FARM_ERROR='+json.dumps({'path':p,'error':type(e).__name__}))
