@@ -49,6 +49,7 @@ class TestApiDashboardClient(unittest.TestCase):
                 "    Editor putBoolean(String k, boolean v);\n"
                 "    Editor putInt(String k, int v); Editor putFloat(String k, float v);\n"
                 "    Editor putLong(String k, long v); Editor putString(String k, String v);\n"
+                "    Editor remove(String k);\n"
                 "    void apply();\n"
                 "  }\n"
                 "}\n",
@@ -78,6 +79,7 @@ public class ApiClientSuite {
             public Editor putFloat(String k, float v) { data.put(k,v); return this; }
             public Editor putLong(String k, long v) { data.put(k,v); return this; }
             public Editor putString(String k, String v) { data.put(k,v); return this; }
+            public Editor remove(String k) { data.remove(k); return this; }
             public void apply() {}
         }; }
     }
@@ -411,6 +413,27 @@ public class ApiClientSuite {
         Map<String, Object> hugeWithoutString = SimpleJson.parseObject("{\\"characterId\\":2,\\"goldAmount\\":9007199254740993000000}");
         SnapshotHistoryTracker.resetFarmSession(farmCtx, hugeWithoutString, t0);
         check(Double.isNaN(SnapshotHistoryTracker.getSessionRates(farmCtx, hugeWithoutString, t0 + 60000).goldPerHour), "inexact large numbers are not presented as exact gain");
+
+        StringBuilder deep = new StringBuilder();
+        for (int i = 0; i < 500; i++) deep.append("[");
+        for (int i = 0; i < 500; i++) deep.append("]");
+        boolean depthRejected = false;
+        try { SimpleJson.parse(deep.toString()); }
+        catch (IllegalArgumentException expected) { depthRejected = true; }
+        check(depthRejected, "deep JSON rejected before stack exhaustion");
+
+        MemContext clearCtx = new MemContext();
+        clearCtx.prefs.edit().putString("inv_page_1", "private1").putString("inv_page_99", "private99")
+                .putInt("inv_page_cnt", 1).putString("guild_json", "privateGuild").apply();
+        IdleArcApiClient.clearCredentials(clearCtx);
+        check(clearCtx.prefs.getString("inv_page_1", "").isEmpty()
+                && clearCtx.prefs.getString("inv_page_99", "").isEmpty()
+                && clearCtx.prefs.getString("guild_json", "").isEmpty(), "logout clears old cache pages and guild");
+        boolean rejectedPath = false;
+        try { IdleArcApiClient.fetchAuthenticatedGetJson("fake", "//evil.example/"); }
+        catch (IllegalArgumentException expected) { rejectedPath = true; }
+        catch (Exception other) { throw new RuntimeException(other); }
+        check(rejectedPath, "API rejects injected paths before making a request");
 
         // Проверка отката Боя с Боссом в RadarTimeParser
         Map<String, Object> bossDash = SimpleJson.parseObject("{\\"isBossOnCooldown\\":true,\\"bossCooldownExpirationTime\\":" + ((nowMs / 1000L) + 1800L) + "}");

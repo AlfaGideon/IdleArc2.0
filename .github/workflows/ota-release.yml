@@ -99,7 +99,8 @@ jobs:
           TAG="v${{ steps.ver.outputs.version_name }}"
           APK_FILE="releases/${{ steps.ver.outputs.apk_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK_FILE" --clobber
+            echo "::error::Release $TAG already exists; refusing to replace a published APK. Increase the version."
+            exit 1
           else
             gh release create "$TAG" "$APK_FILE" \
               --target "${{ github.sha }}" \

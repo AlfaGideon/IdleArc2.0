@@ -100,9 +100,16 @@ public class IdleArcApiClient {
         }
         SharedPreferences cp = ctx.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
         if (cp != null) {
-            cp.edit()
+            SharedPreferences.Editor clearCache = cp.edit();
+            // The loader caps page counts at 100. Clear old pages too, even if a later
+            // sync stored fewer pages and overwrote inv_page_cnt.
+            for (int i = 1; i <= 100; i++) clearCache.remove("inv_page_" + i);
+            clearCache
+              .putInt("inv_total_cnt", 0)
               .putString("dashboard_json", "")
               .putString("gems_json", "")
+              .putString("dungeon_json", "")
+              .putString("guild_json", "")
               .putString("boss_status_json", "")
               .putLong("boss_status_ts", 0L)
               .putInt("inv_page_cnt", 0)
@@ -370,6 +377,7 @@ public class IdleArcApiClient {
     public static String loginForBearerToken(String email, String password) throws Exception {
         URL url = new URL(API_BASE + "/api/login");
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(20000);
@@ -408,8 +416,12 @@ public class IdleArcApiClient {
     }
 
     public static String fetchAuthenticatedGetJson(String bearerToken, String apiPath) throws Exception {
+        if (apiPath == null || !apiPath.matches("/api/[a-z0-9/-]+")) {
+            throw new IllegalArgumentException("Недопустимый путь API");
+        }
         URL url = new URL(API_BASE + apiPath);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(25000);
@@ -457,6 +469,7 @@ public class IdleArcApiClient {
             byte[] buf = new byte[8192];
             int r;
             while ((r = in.read(buf)) != -1) {
+                if (bos.size() + r > 10 * 1024 * 1024) throw new java.io.IOException("Ответ API слишком большой");
                 bos.write(buf, 0, r);
             }
             return new String(bos.toByteArray(), StandardCharsets.UTF_8);

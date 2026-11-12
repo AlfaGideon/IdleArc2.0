@@ -384,7 +384,7 @@ public class MainActivity extends Activity {
         form.setPadding(p, dp(10), p, dp(4));
 
         TextView note = new TextView(this);
-        note.setText("Прямой вход в официальный API idlearc.com (только безопасное чтение слепка Read-Only).\nЛогин и пароль хранятся исключительно на твоём телефоне.");
+        note.setText("Вход в API idlearc.com. Приложение запрашивает данные для чтения, но полномочия токена задаёт игра.\nПароль и токен сохраняются локально без дополнительного шифрования. Не используй пароль, который повторяется на других сайтах.");
         note.setTextSize(12.5f);
         form.addView(note);
 
@@ -428,7 +428,13 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        b.show();
+        AlertDialog dialog = b.create();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+            if (Build.VERSION.SDK_INT >= 31) dialog.getWindow().setHideOverlayWindows(true);
+        }
+        dialog.show();
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).setFilterTouchesWhenObscured(true);
     }
 
     private void toggleFloatingApiWidget() {

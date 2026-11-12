@@ -118,6 +118,7 @@ public final class SimpleJson {
         private final String s;
         private final int len;
         private int pos;
+        private int depth;
 
         Parser(String s) {
             this.s = s;
@@ -140,8 +141,15 @@ public final class SimpleJson {
             skipWs();
             if (pos >= len) return null;
             char c = s.charAt(pos);
-            if (c == '{') return parseObj();
-            if (c == '[') return parseArr();
+            if (c == '{' || c == '[') {
+                if (depth >= 100) throw new IllegalArgumentException("JSON nesting too deep");
+                depth++;
+                try {
+                    return c == '{' ? parseObj() : parseArr();
+                } finally {
+                    depth--;
+                }
+            }
             if (c == '"') return parseStr();
             if (c == 't' || c == 'f') return parseBool();
             if (c == 'n') return parseNull();

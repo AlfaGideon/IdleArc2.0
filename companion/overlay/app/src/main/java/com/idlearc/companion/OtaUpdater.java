@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  * Проверяет наличие свежих подписанных релизов через:
  *   1) GitHub Releases API (/releases/latest и /releases?per_page=5 — собирается GitHub Actions из секретов),
  *   2) ota-manifest.json в ветке main,
- *   3) динамический список активных рабочих веток (arena/*) через GitHub Branches API,
+ *   3) манифест настроенной рабочей ветки,
  * выбирает самую свежую версию по versionCode, скачивает APK с проверкой контрольной суммы SHA-256
  * (с резервными зеркалами URL на случай удаления смерженной ветки) и запускает штатное системное
  * обновление поверх установленной версии без потери отсканированных статов.
@@ -99,9 +99,9 @@ public class OtaUpdater {
     public static String getCurrentVersionName(Context ctx) {
         try {
             PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
-            return pi.versionName != null ? pi.versionName : "2.1.3";
+            return pi.versionName != null ? pi.versionName : "?";
         } catch (Exception e) {
-            return "2.1.3";
+            return "?";
         }
     }
 
@@ -113,7 +113,6 @@ public class OtaUpdater {
         final String activeBranch = ctx.getString(R.string.ota_active_branch);
         final String latestReleaseApi = "https://api.github.com/repos/" + repoSlug + "/releases/latest";
         final String releasesListApi = "https://api.github.com/repos/" + repoSlug + "/releases?per_page=5";
-        final String branchesApi = "https://api.github.com/repos/" + repoSlug + "/branches?per_page=30";
         final Handler ui = new Handler(Looper.getMainLooper());
 
         new Thread(new Runnable() {
@@ -142,24 +141,12 @@ public class OtaUpdater {
                 } catch (Exception ignored) {
                 }
 
-                // 2. Собираем список веток с ota-manifest.json (main + текущая + все живые arena/*)
+                // 2. Проверяем только доверенные ветки, а не каждую рабочую ветку репозитория.
                 Set<String> branches = new LinkedHashSet<>();
                 branches.add("main");
                 if (activeBranch != null && !activeBranch.trim().isEmpty()) {
                     branches.add(activeBranch.trim());
                 }
-                try {
-                    String brJson = httpGetText(branchesApi);
-                    JSONArray brArr = new JSONArray(brJson);
-                    for (int i = 0; i < brArr.length(); i++) {
-                        String bName = brArr.getJSONObject(i).optString("name", "");
-                        if (bName.startsWith("arena/")) {
-                            branches.add(bName);
-                        }
-                    }
-                } catch (Exception ignored) {
-                }
-
                 for (String branch : branches) {
                     String url = "https://raw.githubusercontent.com/" + repoSlug
                             + "/" + branch + "/releases/ota-manifest.json?t=" + cacheBust;
@@ -234,6 +221,7 @@ public class OtaUpdater {
                         }
 
                         long total = conn.getContentLengthLong();
+                        if (total > 100L * 1024 * 1024) throw new Exception("APK превышает допустимый размер");
                         if (total <= 0 && info.sizeBytes > 0) total = info.sizeBytes;
 
                         MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
@@ -244,9 +232,10 @@ public class OtaUpdater {
                             int lastPct = -1;
                             int n;
                             while ((n = in.read(buf)) != -1) {
+                                readTotal += n;
+                                if (readTotal > 100L * 1024 * 1024) throw new Exception("APK превышает допустимый размер");
                                 out.write(buf, 0, n);
                                 sha256.update(buf, 0, n);
-                                readTotal += n;
                                 final int pct = total > 0 ? (int) Math.min(100L, (readTotal * 100L) / total) : -1;
                                 if (pct != lastPct) {
                                     lastPct = pct;
@@ -474,8 +463,11 @@ public class OtaUpdater {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line).append('\n');
+                char[] buffer = new char[4096];
+                int count;
+                while ((count = br.read(buffer)) != -1) {
+                    if (sb.length() + count > 2 * 1024 * 1024) throw new Exception("Ответ OTA слишком большой");
+                    sb.append(buffer, 0, count);
                 }
             }
             return sb.toString();
@@ -488,8 +480,8 @@ public class OtaUpdater {
         String currentUrl = urlStr;
         for (int hop = 0; hop < 8; hop++) {
             URL url = new URL(currentUrl);
-            if (!"https".equalsIgnoreCase(url.getProtocol())) {
-                throw new SecurityException("Разрешены только защищённые HTTPS-обновления");
+            if (!OtaUrlPolicy.isAllowed(currentUrl)) {
+                throw new SecurityException("Недоверенный адрес обновления");
             }
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setInstanceFollowRedirects(false);
