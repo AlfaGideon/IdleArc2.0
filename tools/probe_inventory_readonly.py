@@ -61,8 +61,8 @@ for name, extra in [('xhr', {'X-Requested-With': 'XMLHttpRequest'}),
     ids = {str(x.get('id')) for x in pag['data'] if isinstance(x, dict) and x.get('id') is not None} if pag else set()
     results[name] = {'page': pag.get('current_page'), 'count': len(pag['data']), 'new': len(ids - first_ids)} if pag else 'error'
 for i in range(0, len(results), 10):
-    print('::notice::INVENTORY_DIAG=' + json.dumps(dict(list(results.items())[i:i+10]), separators=(',', ':')))
-print('::notice::INVENTORY_TOTAL=' + json.dumps({'total': first.get('total'), 'page_size': first.get('per_page')}))
+    pass # pagination results verified in previous run
+
 
 # Print field names only; values and player-specific guild details stay private.
 def timing_keys(value, prefix='', depth=0):
@@ -80,9 +80,9 @@ def timing_keys(value, prefix='', depth=0):
         for val in value[:5]:
             out.extend(timing_keys(val, prefix + '[]', depth + 1))
     return sorted(set(out))
-for path in ('/api/dashboard', '/api/dungeon', '/api/guild'):
+for path in ('/api/boss-fight', '/api/boss-fight/status', '/api/boss', '/api/boss/status'):
     data = get(path)
-    print('::notice::TIMER_KEYS=' + json.dumps({'path': path, 'keys': timing_keys(data)}, separators=(',', ':'))[:1800])
+    print('::notice::BOSS_ROUTE=' + json.dumps({'path': path, 'available': data is not None, 'keys': timing_keys(data)}, separators=(',', ':'))[:1800])
 
 # Inspect public app package for actual route strings, without persisting its contents.
 import io
@@ -124,8 +124,8 @@ try:
                 if len(text) <= 100 and re.fullmatch(r'[a-zA-Z0-9_./?=&:-]+', text) and not any(x in low for x in ('google', 'flutter', 'android', 'kotlin')):
                     strings.add(text)
         print('::notice::APP_ROUTES=' + json.dumps(sorted(routes))[:1800])
-        matches = sorted(strings)
-        for i in range(0, min(len(matches), 360), 12):
+        matches = sorted(strings, key=lambda x: (not bool(re.search(r'(?i)(boss.*(cool|ready|time|remain|fight)|inventory|characteritems)', x)), x.lower()))
+        for i in range(0, min(len(matches), 48), 12):
             print('::notice::APP_STRINGS=' + json.dumps(matches[i:i+12])[:1800])
 except Exception as exc:
     print('::notice::APP_SCAN_ERROR=' + type(exc).__name__)
