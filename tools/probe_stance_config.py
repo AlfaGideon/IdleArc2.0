@@ -43,3 +43,21 @@ while queue and len(seen)<100:
                 if urlparse(target).hostname=='idlearc.com' and target not in seen:queue.append(target)
     except Exception as ex:print('::notice::ASSET_ERROR='+type(ex).__name__)
 print('::notice::ASSET_SCAN='+json.dumps({'initial':len(re.findall(r'(?:src|href)=["\']([^"\']+\.js[^"\']*)',html)),'scanned':len(seen)}))
+
+# Only field names/types from the dashboard; never print credentials, tokens or values.
+import os
+r=s.post(base+'/api/login',json={'email':os.environ['IDLEARC_EMAIL'],'password':os.environ['IDLEARC_PASSWORD'],'device_name':'IdleArcHelper diagnostics'},headers={'Accept':'application/json'},timeout=20)
+r.raise_for_status()
+h={'Accept':'application/json','Authorization':'Bearer '+r.json()['token']}
+r=s.get(base+'/api/dashboard',headers=h,timeout=20);r.raise_for_status()
+def scan_fields(obj,path='',depth=0):
+    if depth>5:return
+    if isinstance(obj,dict):
+        for k,v in obj.items():
+            p=path+'.'+str(k)
+            if any(x in k.lower() for x in ('stance','harmony')):
+                print('::notice::DASH_STANCE_FIELD='+json.dumps({'path':p,'type':type(v).__name__,'keys':list(v.keys())[:30] if isinstance(v,dict) else []}))
+            scan_fields(v,p,depth+1)
+    elif isinstance(obj,list):
+        for v in obj[:4]:scan_fields(v,path+'[]',depth+1)
+scan_fields(r.json())

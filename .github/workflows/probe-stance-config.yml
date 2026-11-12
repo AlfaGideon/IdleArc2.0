@@ -12,3 +12,6 @@ jobs:
       - uses: actions/checkout@v6
       - run: pip install -q curl_cffi
       - run: python3 tools/probe_stance_config.py
+        env:
+          IDLEARC_EMAIL: ${{ secrets.IDLEARC_EMAIL }}
+          IDLEARC_PASSWORD: ${{ secrets.IDLEARC_PASSWORD }}
