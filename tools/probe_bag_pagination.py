@@ -1,68 +1,95 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
+import subprocess
 import urllib.request
 
 BASE = "https://idlearc.com"
 
-def raw_req(path, method="GET", token=None, body=None, content_type="application/json"):
-    url = BASE + path
-    headers = {"Accept": "application/json", "User-Agent": "IdleArcHelper/4.0"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    data = None
-    if body is not None:
-        headers["Content-Type"] = content_type
-        data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+def raw_api(path, token):
+    req = urllib.request.Request(BASE + path, headers={
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "Dart/3.3 (dart:io)",
+    })
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read().decode("utf-8"))
 
 def main():
-    tok = raw_req("/api/login", method="POST", body={
-        "email": os.environ["IDLEARC_EMAIL"],
-        "password": os.environ["IDLEARC_PASSWORD"],
-        "device_name": "IdleArcSchemaProbe"
-    })["token"]
+    login_req = urllib.request.Request(
+        BASE + "/api/login",
+        data=json.dumps({
+            "email": os.environ["IDLEARC_EMAIL"],
+            "password": os.environ["IDLEARC_PASSWORD"],
+            "device_name": "IdleArcProbe",
+        }).encode("utf-8"),
+        headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "Dart/3.3 (dart:io)"},
+        method="POST",
+    )
+    with urllib.request.urlopen(login_req, timeout=20) as r:
+        tok = json.loads(r.read().decode("utf-8"))["token"]
 
-    p1 = raw_req("/api/inventory", token=tok)
-    p1_id = p1["characterItemsPaginated"]["data"][0]["id"]
+    p1 = raw_api("/api/inventory", tok)
+    id0 = p1["characterItemsPaginated"]["data"][0]["id"]
 
-    results = {"p1_first_id": p1_id}
-    trials = [
-        ("GET_json_body_page2", "/api/inventory?page=2", "GET", {"page": 2}, "application/json"),
-        ("GET_form_body_page2", "/api/inventory?page=2", "GET", b"page=2", "application/x-www-form-urlencoded"),
-        ("POST_page2", "/api/inventory", "POST", {"page": 2}, "application/json"),
-        ("GET_slot_gloves", "/api/inventory?slot=gloves&type=gloves", "GET", None, "application/json"),
-        ("GET_json_slot_gloves", "/api/inventory", "GET", {"slot": "gloves", "type": "gloves", "per_page": 100}, "application/json"),
-        ("ep_character_items", "/api/character-items?page=2", "GET", None, "application/json"),
-        ("ep_items", "/api/items?page=2", "GET", None, "application/json"),
-        ("ep_forge", "/api/forge", "GET", None, "application/json"),
-        ("ep_crafting", "/api/crafting", "GET", None, "application/json"),
-        ("ep_presets", "/api/presets", "GET", None, "application/json"),
-        ("ep_equipment", "/api/equipment", "GET", None, "application/json"),
-    ]
-
-    for name, path, meth, body, ctype in trials:
+    # 1. Test query params & subroutes with Dart User-Agent + X-Requested-With
+    sub_tests = {}
+    for p in [
+        "/api/inventory?page=2",
+        "/api/inventory?per_page=100",
+        "/api/inventory?perPage=100",
+        "/api/inventory?limit=100",
+        "/api/inventory?all=1",
+        "/api/inventory/all",
+        "/api/inventory/list",
+        "/api/inventory/filter?page=2",
+        "/api/inventory/page/2",
+        "/api/character/inventory?page=2",
+        "/api/equipment/inventory",
+        "/api/bag",
+        "/api/loot",
+    ]:
         try:
-            r = raw_req(path, method=meth, token=tok, body=body, content_type=ctype)
-            if isinstance(r, dict) and "characterItemsPaginated" in r:
-                cp = r["characterItemsPaginated"]
-                d = cp.get("data", [])
-                results[name] = {"cur": cp.get("current_page"), "cnt": len(d), "id0": d[0]["id"] if d else None}
-            elif isinstance(r, dict):
-                # check if any key holds a list of items > 10!
-                summary = {}
-                for k, v in r.items():
-                    if isinstance(v, list):
-                        summary[k] = f"list({len(v)})"
-                    elif isinstance(v, dict) and "data" in v:
-                        summary[k] = f"pag(cur={v.get('current_page')},len={len(v.get('data',[]))})"
-                results[name] = summary or list(r.keys())[:8]
+            res = raw_api(p, tok)
+            cp = res.get("characterItemsPaginated", res) if isinstance(res, dict) else {}
+            d = cp.get("data", []) if isinstance(cp, dict) else (res if isinstance(res, list) else [])
+            sub_tests[p] = {
+                "cur": cp.get("current_page") if isinstance(cp, dict) else None,
+                "len": len(d),
+                "diff": (d[0].get("id") != id0) if d and isinstance(d[0], dict) else False,
+            }
         except Exception as e:
-            results[name] = str(e)[:45]
+            sub_tests[p] = str(e)[:32]
+    print("::notice::API_SUB_TESTS=" + json.dumps(sub_tests, ensure_ascii=False)[:1800])
 
-    print("::notice::TRIAL_RESULTS=" + json.dumps(results, ensure_ascii=False)[:1850])
+    # 2. Dump /login DOM via preinstalled google-chrome to get Vite JS assets!
+    dom = subprocess.check_output(
+        ["google-chrome", "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", "https://idlearc.com/login"],
+        text=True, stderr=subprocess.DEVNULL, timeout=25
+    )
+    js_paths = sorted(set(re.findall(r'/build/assets/[^"\'>\s]+\.js', dom)))
+    js_hits = {"login_scripts": js_paths[:10]}
+    for jp in js_paths[:6]:
+        js_body = subprocess.check_output(
+            ["curl", "-sL", "-A", "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0.0.0 Safari/537.36", BASE + jp],
+            text=True, timeout=20
+        )
+        inv_chunks = sorted(set(re.findall(r'[A-Za-z0-9_\-]*[Ii]nventory[A-Za-z0-9_\-\.]*\.js', js_body)))
+        api_mentions = sorted(set(re.findall(r'/api/[A-Za-z0-9_/\-]+', js_body)))
+        if inv_chunks or api_mentions:
+            js_hits[jp] = {"inv_chunks": inv_chunks[:10], "apis": api_mentions[:30]}
+        for ic in inv_chunks[:4]:
+            ic_body = subprocess.check_output(
+                ["curl", "-sL", "-A", "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0.0.0 Safari/537.36", BASE + "/build/assets/" + ic],
+                text=True, timeout=20
+            )
+            ctx = re.findall(r'.{0,50}(?:characterItemsPaginated|inventory|per_page|page).{0,70}', ic_body)
+            ic_apis = sorted(set(re.findall(r'/[a-zA-Z0-9_/\-]+', ic_body)))
+            js_hits[ic] = {"ctx": ctx[:10], "routes": [x for x in ic_apis if "inv" in x.lower() or "item" in x.lower()][:20]}
+
+    print("::notice::CHROME_JS_HITS=" + json.dumps(js_hits, ensure_ascii=False)[:1850])
 
 if __name__ == "__main__":
     main()
