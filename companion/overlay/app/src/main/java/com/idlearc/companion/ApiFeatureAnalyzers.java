@@ -643,16 +643,8 @@ public final class ApiFeatureAnalyzers {
         List<String> lines = new ArrayList<>();
         if (d == null) return lines;
 
-        // 1. Забытые очки дерева и глобальные пассивки
-        int treePts = SimpleJson.intVal(d, "treePoints", 0);
-        int passPts = SimpleJson.intVal(d, "availablePassivePoints", 0);
-        if (treePts > 0 || passPts > 0) {
-            lines.add(String.format(Locale.US,
-                    "🔥 НЕВЛОЖЕННЫЕ ОЧКИ: Глобальное дерево +%d · Пассивки +%d — обязательно распредели их в игре!",
-                    treePts, passPts));
-        } else {
-            lines.add("✅ Все очки Глобального дерева и Пассивок распределены без остатка.");
-        }
+        // Неизвестная схема не позволяет заключить, что остаток равен нулю.
+        lines.add("ℹ️ Остаток очков общего пассивного дерева не подтверждён — проверь в игре.");
 
         List<Object> passives = SimpleJson.asList(d.get("passives"));
         if (passives != null && !passives.isEmpty()) {

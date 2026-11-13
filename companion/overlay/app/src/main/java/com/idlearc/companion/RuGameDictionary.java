@@ -16,6 +16,7 @@ public final class RuGameDictionary {
         if (rawKey == null || rawKey.trim().isEmpty()) return "Параметр";
         String k = rawKey.trim().toLowerCase(Locale.ROOT);
         switch (k) {
+            case "pet_damage_flat":
             case "pet_damage":
             case "pet_damage_pct":
             case "pet_damage_bonus":
@@ -24,6 +25,7 @@ public final class RuGameDictionary {
                 return "Урон питомцев";
             case "attack_pet_damage":
                 return "Атака и урон питомцев";
+            case "attack_damage_flat":
             case "attack_damage":
             case "attack_damage_pct":
             case "attack_damage_percent":
@@ -55,6 +57,8 @@ public final class RuGameDictionary {
             case "block_chance":
             case "block":
                 return "Шанс блока";
+            case "max_hp_flat":
+            case "max_hp_percent":
             case "max_health":
             case "max_health_pct":
             case "max_health_percent":
@@ -115,6 +119,7 @@ public final class RuGameDictionary {
             case "item_find":
             case "item_drops":
                 return "Дроп предметов";
+            case "material_drop_chance":
             case "material_quantity":
             case "material_drop_pct":
             case "material_drops":

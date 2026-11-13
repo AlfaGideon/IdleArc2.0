@@ -1365,6 +1365,7 @@ public final class DashboardCardRenderer {
                                                DruidProfile p,
                                                Map<String, Object> gameCfg) {
         root.removeAllViews();
+        root.addView(passiveTreeCard(ctx, dash, p, gameCfg));
         if (dash == null || p == null) {
             root.addView(emptySyncCard(ctx));
             return;
@@ -1401,6 +1402,74 @@ public final class DashboardCardRenderer {
             }
         }
         root.addView(journalCard);
+    }
+
+    private static View passiveTreeCard(final Context ctx, final Map<String, Object> dash,
+                                        final DruidProfile p, final Map<String, Object> config) {
+        LinearLayout card = makeCard(ctx, "#17221E", "#66BB6A");
+        card.addView(cardTitle(ctx, "🌳 Помощник общего пассивного дерева", "#A5D6A7"));
+        final android.content.SharedPreferences prefs = ctx.getSharedPreferences("passive_tree_guide", Context.MODE_PRIVATE);
+        final int autoClass = PassiveTreeAdvisor.detectedClass(dash, p == null ? 0 : p.overrideClassId);
+        String mode = p == null || p.mode == null ? "PUSH" : p.mode.name();
+        final String activeMode = mode;
+        card.addView(bodyText(ctx, "Режим: " + (p == null || p.mode == null ? "Пуш" : p.mode.title)
+                + " · Изменяется в настройках сборки. Это ориентиры, а не расчёт оптимума.", "#CFD8DC", 12f));
+        card.addView(bodyText(ctx, "Вложения, остаток очков, капы и доступность узлов неизвестны. "
+                + "Строки ниже — варианты для сравнения, не готовое распределение: проверь открытие и свободные места в игре. Автоматических действий нет.", "#FFE082", 12f));
+        final int tierCount = PassiveTreeAdvisor.tierCount(config);
+        final int[] selection = {prefs.getInt("class", 0), prefs.getInt("tier", 0)};
+        if (selection[0] < 0 || selection[0] > 5) selection[0] = 0;
+        if (selection[1] < 0 || selection[1] >= tierCount) selection[1] = 0;
+        final String[] classNames = {"Авто: " + (autoClass == 0 ? "неизвестен" : HeroClassProfile.HeroClass.fromIdOrName(autoClass, "").ruName),
+                "Воин", "Лучник", "Маг", "Разбойник", "Друид"};
+        final Button classButton = new Button(ctx);
+        card.addView(classButton);
+        LinearLayout tierControls = new LinearLayout(ctx);
+        tierControls.setOrientation(LinearLayout.HORIZONTAL);
+        final Button previous = new Button(ctx);
+        final Button next = new Button(ctx);
+        final TextView tierLabel = bodyText(ctx, "", "#E8F5E9", 13f);
+        previous.setText("◀"); next.setText("▶");
+        tierControls.addView(previous);
+        tierControls.addView(tierLabel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        tierControls.addView(next);
+        card.addView(tierControls);
+        final LinearLayout lines = new LinearLayout(ctx);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        card.addView(lines);
+        final Runnable update = new Runnable() {
+            @Override public void run() {
+                classButton.setText("Класс: " + classNames[selection[0]] + " (сменить)");
+                tierLabel.setText(tierCount == 0 ? "Нет данных ярусов" : "Ярус " + (selection[1] + 1) + " / " + tierCount);
+                previous.setEnabled(tierCount > 0 && selection[1] > 0);
+                next.setEnabled(tierCount > 0 && selection[1] + 1 < tierCount);
+                lines.removeAllViews();
+                int cls = selection[0] == 0 ? autoClass : selection[0];
+                for (String line : PassiveTreeAdvisor.recommendations(config, selection[1], cls, activeMode)) {
+                    lines.addView(bulletLine(ctx, line, "#E8F5E9"));
+                }
+            }
+        };
+        classButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                selection[0] = (selection[0] + 1) % classNames.length;
+                prefs.edit().putInt("class", selection[0]).apply(); update.run();
+            }
+        });
+        previous.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (selection[1] > 0) selection[1]--;
+                prefs.edit().putInt("tier", selection[1]).apply(); update.run();
+            }
+        });
+        next.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (selection[1] + 1 < tierCount) selection[1]++;
+                prefs.edit().putInt("tier", selection[1]).apply(); update.run();
+            }
+        });
+        update.run();
+        return card;
     }
 
     // =========================================================================
