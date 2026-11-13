@@ -1,8 +1,8 @@
 {
-  "versionCode": 560,
-  "versionName": "5.6.0",
-  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.6.0/releases/IdleArcHelper-v5.6.0.apk",
-  "sha256": "1317573f7ab42ce03bb36cf5fd34c2e8be4f4cc2c2bccc7eacd7de4932b40c33",
-  "sizeBytes": 476281,
-  "changelog": "v5.6.0: ориентиры для Оплота и возмездия, сравнение защиты на предметах; непроверенные оценки перековки для Оплота скрыты. Это не расчёт DPS."
+  "versionCode": 570,
+  "versionName": "5.7.0",
+  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.7.0/releases/IdleArcHelper-v5.7.0.apk",
+  "sha256": "41c001444b53f76dbd4a41fd404fc7b62071d5315333c17b80c9e64f5a18d038",
+  "sizeBytes": 480376,
+  "changelog": "v5.7.0: более простой интерфейс, понятные сравнения аффиксов и отдельная вкладка стоек. Крестик полностью закрывает плавающий виджет."
 }
