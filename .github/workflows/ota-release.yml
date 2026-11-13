@@ -61,7 +61,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          OTA_APK_URL: "https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version_name }}/${{ steps.ver.outputs.apk_name }}"
+          OTA_APK_URL: "https://raw.githubusercontent.com/${{ github.repository }}/v${{ steps.ver.outputs.version_name }}/releases/${{ steps.ver.outputs.apk_name }}"
           OTA_CHANGELOG: ${{ inputs.changelog }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
@@ -92,6 +92,42 @@ jobs:
           print("Signing certificate matches v4.1.0")
           PYCODE
 
+      # Signed artifacts are small and this repository already keeps release APKs in
+      # releases/. Publish a verified mirror in THIS branch before tagging it, so
+      # existing clients can use raw.githubusercontent.com if release assets fail.
+      - name: Commit and verify the signed OTA mirror on the current branch
+        id: mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "::error::OTA mirror must be built from a branch; tag-only builds cannot update it."
+            exit 1
+          fi
+          APK_PATH="releases/${{ steps.ver.outputs.apk_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$APK_PATH" releases/ota-manifest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Mirror signed OTA v${{ steps.ver.outputs.version_name }} [skip ci]"
+            git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          fi
+          MIRROR_SHA=$(git rev-parse HEAD)
+          echo "sha=$MIRROR_SHA" >> "$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/contents/$APK_PATH?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > /tmp/ota-mirror.apk
+          gh api "repos/$GITHUB_REPOSITORY/contents/releases/ota-manifest.json?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > /tmp/ota-mirror.json
+          python3 - "$APK_PATH" /tmp/ota-mirror.apk /tmp/ota-mirror.json <<'PYCODE'
+          import hashlib, json, pathlib, sys
+          local = pathlib.Path(sys.argv[1]).read_bytes()
+          remote = pathlib.Path(sys.argv[2]).read_bytes()
+          meta = json.loads(pathlib.Path(sys.argv[3]).read_text('utf-8'))
+          sha = hashlib.sha256(local).hexdigest()
+          if local != remote or meta.get('sha256', '').lower() != sha or meta.get('sizeBytes') != len(local):
+              raise SystemExit('Remote mirror does not match signed APK and manifest')
+          print('Remote mirror matches signed APK and manifest:', sha)
+          PYCODE
+
       - name: Publish GitHub Release & Git Tag (OTA endpoint)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,7 +139,7 @@ jobs:
             exit 1
           else
             gh release create "$TAG" "$APK_FILE" releases/ota-manifest.json \
-              --target "${{ github.sha }}" \
+              --target "${{ steps.mirror.outputs.sha }}" \
               --title "IdleArc Druid Helper ${TAG}" \
               --notes "Подписанный OTA-релиз ${TAG} (versionCode ${{ steps.ver.outputs.version_code }})."
           fi

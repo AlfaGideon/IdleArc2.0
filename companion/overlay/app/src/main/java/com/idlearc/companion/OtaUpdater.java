@@ -120,6 +120,7 @@ public class OtaUpdater {
             public void run() {
                 ReleaseInfo best = null;
                 String lastErr = null;
+                boolean releaseSeen = false;
                 long cacheBust = System.currentTimeMillis() / 15000L;
 
                 // 1. Проверяем официальный GitHub Releases (/releases/latest + последние 5 релизов)
@@ -127,6 +128,7 @@ public class OtaUpdater {
                     String relJson = httpGetText(latestReleaseApi);
                     ReleaseInfo fromRel = parseGitHubReleaseJson(relJson);
                     best = pickNewer(best, fromRel);
+                    if (fromRel != null) releaseSeen = true;
                 } catch (Exception e) {
                     lastErr = e.getMessage();
                 }
@@ -137,6 +139,7 @@ public class OtaUpdater {
                     for (int i = 0; i < arr.length(); i++) {
                         ReleaseInfo item = parseGitHubReleaseObject(arr.getJSONObject(i));
                         best = pickNewer(best, item);
+                        if (item != null) releaseSeen = true;
                     }
                 } catch (Exception ignored) {
                 }
@@ -161,6 +164,7 @@ public class OtaUpdater {
 
                 final ReleaseInfo found = best;
                 final String errMsg = lastErr;
+                final boolean cannotConfirm = OtaFreshness.cannotConfirm(releaseSeen, curCode, found != null ? found.versionCode : 0);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -168,6 +172,9 @@ public class OtaUpdater {
                             cb.onError(errMsg != null ? errMsg : "Сервер обновлений недоступен");
                         } else if (found.versionCode > curCode) {
                             cb.onUpdateAvailable(found, curCode, curName);
+                        } else if (cannotConfirm) {
+                            cb.onError("Не удалось проверить GitHub Releases; резервный манифест не подтверждает актуальность. "
+                                    + "Проверь интернет и повтори проверку.");
                         } else {
                             cb.onUpToDate(curCode, curName);
                         }
@@ -251,6 +258,9 @@ public class OtaUpdater {
                             }
                         }
 
+                        if (info.sizeBytes > 0 && partFile.length() != info.sizeBytes) {
+                            throw new Exception("Неполная загрузка APK: " + partFile.length() + " из " + info.sizeBytes + " байт");
+                        }
                         String actualSha = bytesToHex(sha256.digest());
                         if (!info.sha256.isEmpty() && !info.sha256.equalsIgnoreCase(actualSha)) {
                             //noinspection ResultOfMethodCallIgnored
@@ -401,6 +411,7 @@ public class OtaUpdater {
 
         String apkUrl = null;
         long apkSize = 0L;
+        String apkDigest = "";
         String manifestUrl = null;
         for (int i = 0; i < assets.length(); i++) {
             JSONObject a = assets.getJSONObject(i);
@@ -409,9 +420,18 @@ public class OtaUpdater {
             if (name.endsWith(".apk") && !dl.isEmpty()) {
                 apkUrl = dl;
                 apkSize = a.optLong("size", 0L);
+                apkDigest = OtaFreshness.sha256FromAssetDigest(a.optString("digest", ""));
             } else if (name.equals("ota-manifest.json") && !dl.isEmpty()) {
                 manifestUrl = dl;
             }
+        }
+
+        // GitHub publishes the APK's SHA-256 in the release API. Avoid a blocking
+        // extra asset download for every release during update discovery.
+        String verName = tag.startsWith("v") || tag.startsWith("V") ? tag.substring(1) : tag;
+        int inferredCode = inferVersionCodeFromSemver(verName);
+        if (apkUrl != null && inferredCode > 0 && !apkDigest.isEmpty()) {
+            return new ReleaseInfo(inferredCode, verName, apkUrl, apkDigest, apkSize, body);
         }
 
         if (manifestUrl != null) {
@@ -433,8 +453,6 @@ public class OtaUpdater {
         }
 
         if (apkUrl == null) return null;
-        String verName = tag.startsWith("v") || tag.startsWith("V") ? tag.substring(1) : tag;
-        int inferredCode = inferVersionCodeFromSemver(verName);
         if (inferredCode <= 0) return null;
         return new ReleaseInfo(inferredCode, verName, apkUrl, "", apkSize, body);
     }

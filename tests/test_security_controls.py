@@ -56,3 +56,27 @@ public class PolicyTest {
         widget = (SRC / 'OverlayService.java').read_text(encoding='utf-8')
         self.assertEqual(widget.count('OtaUpdater.getCurrentVersionName(this)'), 2)
         self.assertNotIn('IdleArcHelper v4.1', widget)
+
+    @unittest.skipUnless(ECJ.exists() or (jdk4py.JAVA_HOME / 'bin/javac').exists(), 'Java compiler unavailable')
+    def test_ota_freshness_and_asset_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            source = temp / 'FreshnessTest.java'
+            source.write_text('''package com.idlearc.companion;
+public class FreshnessTest {
+  public static void main(String[] args) {
+    if (!OtaFreshness.cannotConfirm(false, 510, 410)) throw new AssertionError("old mirror cannot establish freshness");
+    if (!OtaFreshness.cannotConfirm(false, 510, 510)) throw new AssertionError("same mirror cannot establish freshness");
+    if (OtaFreshness.cannotConfirm(false, 510, 540)) throw new AssertionError("newer mirror is usable");
+    if (OtaFreshness.cannotConfirm(true, 510, 510)) throw new AssertionError("valid release metadata confirms current");
+    String digest="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    if (!OtaFreshness.sha256FromAssetDigest("sha256:" + digest).equals(digest)) throw new AssertionError("digest");
+    if (!OtaFreshness.sha256FromAssetDigest("SHA256:" + digest.toUpperCase()).equals(digest)) throw new AssertionError("case");
+    for(String bad : new String[]{"", "sha1:"+digest, "sha256:1234", "sha256:"+digest+"0", "garbage"})
+      if(!OtaFreshness.sha256FromAssetDigest(bad).isEmpty()) throw new AssertionError("bad digest accepted");
+  }
+}''', encoding='utf-8')
+            cmd = ([str(jdk4py.JAVA), '-jar', str(ECJ), '-17', '-d', str(temp)] if ECJ.exists()
+                   else [str(jdk4py.JAVA_HOME / 'bin/javac'), '-d', str(temp)])
+            subprocess.run(cmd + [str(SRC / 'OtaFreshness.java'), str(source)], check=True, capture_output=True)
+            subprocess.run([str(jdk4py.JAVA), '-cp', str(temp), 'com.idlearc.companion.FreshnessTest'], check=True, capture_output=True)
