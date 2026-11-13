@@ -115,8 +115,22 @@ jobs:
           fi
           MIRROR_SHA=$(git rev-parse HEAD)
           echo "sha=$MIRROR_SHA" >> "$GITHUB_OUTPUT"
-          gh api "repos/$GITHUB_REPOSITORY/contents/$APK_PATH?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > /tmp/ota-mirror.apk
-          gh api "repos/$GITHUB_REPOSITORY/contents/releases/ota-manifest.json?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > /tmp/ota-mirror.json
+          # GitHub may take a moment to expose a just-pushed commit through the
+          # Contents API. Retry transient failures before verifying the bytes.
+          fetch_mirror() {
+            local path="$1" output="$2" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > "$output"; then
+                return 0
+              fi
+              echo "Mirror fetch failed for $path (attempt $attempt/5)" >&2
+              sleep 5
+            done
+            echo "::error::Could not fetch mirror path $path at $MIRROR_SHA"
+            return 1
+          }
+          fetch_mirror "$APK_PATH" /tmp/ota-mirror.apk
+          fetch_mirror "releases/ota-manifest.json" /tmp/ota-mirror.json
           python3 - "$APK_PATH" /tmp/ota-mirror.apk /tmp/ota-mirror.json <<'PYCODE'
           import hashlib, json, pathlib, sys
           local = pathlib.Path(sys.argv[1]).read_bytes()
