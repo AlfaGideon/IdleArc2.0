@@ -120,14 +120,17 @@ public final class HeroClassProfile {
 
     /** Краткий гайд механики класса, лучшей стойки и эталонного Бонуса дропа под выбранный режим */
     public static String buildClassGuide(HeroClass hc, DruidProfile.BuildMode mode) {
-        if (hc == null) hc = HeroClass.DRUID;
-        String bisDropRu = RuGameDictionary.statName(hc.bisCombatDropBonus);
-        String bisPetSpecRu = RuGameDictionary.statName(hc.bisPetSpecialBonus);
-        return "• Боевая механика: " + hc.mechanicGuide + "\n"
-                + "• Стойка: " + hc.stanceAdvice + "\n"
-                + "• Эталонный Бонус дропа на всех 10 вещах (Пуш): «" + bisDropRu
-                + "» (под Боссов — «Урон по боссам %», под Фарм — «Дроп предметов / рун / рубинов»)\n"
-                + "• Лучший врождённый спец-бонус на 4 питомцах: «" + bisPetSpecRu + "»";
+        if (hc == null) return "Класс не определён. Синхронизируй аккаунт и проверь выбор класса.";
+        String focus;
+        switch (hc) {
+            case WARRIOR: focus = "Сравни атаку или защиту и возмездие в зависимости от стойки и задач."; break;
+            case ARCHER: focus = "Сравни прямую атаку, крит и питомца в зависимости от навыков и стойки."; break;
+            case MAGE: focus = "Сравни атаку, крит и навыки; проверяй текущие игровые описания."; break;
+            case ROGUE: focus = "Сравни атаку, дополнительные удары и навыки; проверяй текущие игровые описания."; break;
+            default: focus = "Сравни вклад питомца и атаки. Сравни Гармонию с Повелителем зверей. Баланс не рассчитывается как DPS; конверсию не добавляй к итоговому урону повторно.";
+        }
+        return "Класс: " + hc.ruName + ". " + focus
+                + "\nЭто направления для сравнения, не универсальный БИС или подтверждённый расчёт эффективности. Стойка берётся из последнего снимка.";
     }
 
     /** Лучшее семейство самоцвета под конкретный класс, категорию гнезда и цель сборки */

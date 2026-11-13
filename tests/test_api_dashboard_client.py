@@ -316,6 +316,20 @@ public class ApiClientSuite {
         java.util.List<ApiDashboardEngine.ServerPositionEval> posForHarmony = new java.util.ArrayList<>();
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(1, AffixPositionOptimizer.AffixType.GOLD_GAIN, "Gold", 4, 1, 5, 50, 0, false, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         ApiDashboardEngine.ServerItemAudit ringForHarmony = new ApiDashboardEngine.ServerItemAudit(ApiDashboardEngine.EquippedSlotKey.RING_1, SlotAffixAdvisor.GearSlot.RING, "кольцо", "кольцо", 1, 1, 0, 10, 0, 0, "", "", posForHarmony, 0, 0, "");
+        Map<String,Object> bulwarkDash = new java.util.HashMap<String,Object>(); bulwarkDash.put("activeCombatStance", "bulwark"); bulwarkDash.put("characterClassId", 1);
+        check(RetaliationGuide.active(bulwarkDash), "bulwark activates retaliation guidance");
+        check(!RetaliationGuide.active(harmonyDash), "no bulwark recommendation outside bulwark");
+        String warriorRet = RetaliationGuide.advice(bulwarkDash, 1, "BOSS").toString();
+        check(warriorRet.contains("Reflecting") && warriorRet.contains("Iron Constitution") && warriorRet.contains("Босс"), "warrior boss retaliation priorities");
+        check(!RetaliationGuide.advice(bulwarkDash, 4, "FARM").toString().contains("Iron Constitution"), "warrior skills not attributed to other classes");
+        check(RetaliationGuide.relevant(AffixPositionOptimizer.AffixType.DEFENSE_PERCENT), "defense affix recognized");
+        check(!RetaliationGuide.relevant(AffixPositionOptimizer.AffixType.DODGE_CHANCE), "dodge not a defense recommendation in bulwark");
+        check(RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).contains(AffixPositionOptimizer.AffixType.DEFENSE_PERCENT), "same-kind defense alternative on ring");
+        check(!HeroClassProfile.buildClassGuide(HeroClassProfile.HeroClass.WARRIOR, DruidProfile.BuildMode.PUSH).contains("Эталонный"), "warrior guide no assumed best drop");
+        posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(5, AffixPositionOptimizer.AffixType.DEFENSE_PERCENT, "Defense", 1, 1, 5, 50, 0, false, false, true, null, 0, 0, new java.util.ArrayList<String>()));
+        check(!RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).contains(AffixPositionOptimizer.AffixType.DEFENSE_PERCENT), "do not suggest duplicate defense affix");
+        posForHarmony.remove(1);
+        check(!RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).contains(AffixPositionOptimizer.AffixType.LOCAL_PERCENT_DEFENSE), "incompatible armor prefix never shown on ring suffix");
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).contains("Урон питомца"), "real ring pet candidate");
         check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT) == AffixPositionOptimizer.AffixType.PET_DAMAGE, "attack-heavy scenario compares pet");
         check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.PET_DOMINANT) == AffixPositionOptimizer.AffixType.ADDED_DAMAGE, "pet-heavy scenario compares attack");
@@ -328,6 +342,7 @@ public class ApiClientSuite {
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(1, AffixPositionOptimizer.AffixType.GOLD_GAIN, "Gold", 4, 1, 5, 50, 0, true, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).isEmpty(), "no suggestion when all rows locked");
         check(!HarmonyAffixGuide.canCompareRow(AffixPositionOptimizer.AffixType.PET_DAMAGE, posForHarmony.get(0)), "locked row is not highlighted");
+        check(RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).isEmpty(), "locked row has no retaliation alternatives");
         ApiDashboardEngine.ServerItemAudit helmForHarmony = new ApiDashboardEngine.ServerItemAudit(ApiDashboardEngine.EquippedSlotKey.HELMET, SlotAffixAdvisor.GearSlot.HELMET, "шлем", "шлем", 1, 1, 0, 10, 0, 0, "", "", posForHarmony, 0, 0, "");
         check(HarmonyAffixGuide.candidate(helmForHarmony, StanceAdvisor.PET_DOMINANT).isEmpty(), "no incompatible slot candidate");
 
@@ -725,6 +740,7 @@ public class ApiClientSuite {
                 str(SRC_DIR / "StanceAdvisor.java"),
                 str(SRC_DIR / "HarmonyBalance.java"),
                 str(SRC_DIR / "HarmonyAffixGuide.java"),
+                str(SRC_DIR / "RetaliationGuide.java"),
                 str(SRC_DIR / "LivePollPolicy.java"),
                 str(SRC_DIR / "LiveSections.java"),
                 str(SRC_DIR / "DruidProfile.java"),

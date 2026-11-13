@@ -94,7 +94,7 @@ public final class PassiveTreeAdvisor {
                 String target = StanceAdvisor.target(stance, scenario);
                 if (attack && target.equals("attack") || pet && target.equals("pet")) priority = 100;
                 if ("bulwark".equals(stance) && stat.equals("dodge_chance")) priority = 0;
-                if ("bulwark".equals(stance) && (stat.equals("defense") || stat.equals("defense_percent"))) priority = 95;
+                if ("bulwark".equals(stance) && (stat.equals("defense") || stat.equals("defense_percent"))) priority = 110;
                 if (priority > bestPriority) {
                     best = node; bestPriority = priority;
                 }

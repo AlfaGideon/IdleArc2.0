@@ -160,6 +160,8 @@ public final class RuGameDictionary {
                 return "Убийцы (Урон по боссам)";
             case "boss_damage_bonus":
                 return "Урон по боссам";
+            case "reflecting":
+                return "Отражение (возмездие)";
             case "fortified":
                 return "Укрепление (Макс. здоровье %)";
             case "armored":
