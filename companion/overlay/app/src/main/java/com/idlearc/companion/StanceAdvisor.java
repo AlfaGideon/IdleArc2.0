@@ -53,7 +53,17 @@ public final class StanceAdvisor {
                 lines.add("Получено " + number(100.0 * (h.heroBonusPct / h.maximumBonusPct))
                         + "% от потолка бонуса. Это не соотношение урона и не определяет, какая сторона сильнее.");
             }
-            lines.add("Соотношение урона и направление перекоса API здесь не подтверждает. Выбранный ниже сценарий — только предположение, не измерение.");
+            HarmonyBalance comparison = HarmonyBalance.fromDashboard(dash);
+            if (comparison != null) {
+                lines.add("Сравнение средних значений листа: атака " + number(comparison.attackShare.doubleValue())
+                        + "% · питомец " + number(comparison.petShare.doubleValue())
+                        + "%. Это средние удары, не подтверждённый баланс Гармонии и не DPS: частота, навыки, крит и дополнительные удары здесь не учтены.");
+                lines.add("У Друида передача идёт из плоской базы атаки и может достигать 75%; урон питомца в снимке уже рассчитан игрой. Не добавляй 75% повторно и не принимай потолок за фактический уровень навыков.");
+                java.math.BigDecimal conversion = HarmonyBalance.conversionAmount(dash);
+                if (conversion != null) lines.add("Плоская конверсия по снимку: " + conversion.toString()
+                        + " в базу питомца; она уже учтена игрой и не равна его итоговому урону.");
+            } else lines.add("Средние значения атаки и питомца отсутствуют или некорректны. Нельзя рассчитать даже ориентировочное сравнение.");
+            lines.add("Направление перекоса в механике Гармонии не подтверждено. Сценарий — гипотеза; проверь его по экрану игры.");
             lines.add("Сценарий: " + scenarioName(scenario) + ". После каждого изменения сравни бонус и реальный бой на одном ML; не обязательно максимум Гармонии даёт максимум DPS.");
         } else if ("aggressive".equals(stance)) {
             lines.add("Приоритет сравнения: атака героя. Не считай это доказательством, что атака выгоднее питомца для твоей сборки.");
@@ -92,6 +102,18 @@ public final class StanceAdvisor {
                 if (selected.size() == 4) break;
             }
             if (!selected.isEmpty()) lines.add("Надетые варианты для сравнения: " + join(selected) + ".");
+            if (stance.equals("harmony") && !target.isEmpty() && items != null) {
+                String source = target.equals("pet") ? "fierce" : "companions";
+                String goal = target.equals("pet") ? "Компаньона (урон питомца)" : "Свирепость (урон атаки)";
+                for (Object o : items) {
+                    Map<String,Object> item = SimpleJson.asMap(o);
+                    if (!source.equalsIgnoreCase(SimpleJson.str(item, "drop_bonus_type", ""))) continue;
+                    String slot = SimpleJson.str(item, "slot", SimpleJson.str(item, "type", "слот"));
+                    String name = SimpleJson.str(item, "name", "");
+                    lines.add("Проверить слот " + RuGameDictionary.humanizeSlug(slot) + (name.isEmpty() ? "" : " · " + name)
+                            + ": сравни текущий бонус с «" + goal + "» в игре. Учитывай цену, аффиксы и изменение общего урона; улучшение не гарантировано.");
+                }
+            }
         }
         lines.add("Меняй в игре один параметр за раз; рекомендации не меняют игру и не рассчитывают итог перековки или DPS.");
         return lines;

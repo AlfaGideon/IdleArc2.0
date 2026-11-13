@@ -678,6 +678,11 @@ public final class DashboardCardRenderer {
                 card.addView(posBox);
             }
 
+            if (uncertainHarmony) {
+                String suggestion = HarmonyAffixGuide.candidate(ia, stanceScenario(ctx, dash));
+                if (!suggestion.isEmpty()) card.addView(bodyText(ctx, suggestion, "#FFE082", 12f));
+            }
+
             if (!uncertainHarmony && ia.awakenAdvice != null && !ia.awakenAdvice.isEmpty()) {
                 card.addView(bodyText(ctx, ia.awakenAdvice, "#CE93D8", 11.5f));
             }
@@ -1391,12 +1396,23 @@ public final class DashboardCardRenderer {
         return id.isEmpty() || id.equals("0") ? "" : "character:" + id;
     }
 
-    private static int stanceScenario(Context ctx, Map<String, Object> dash) {
+    private static int stanceManualScenario(Context ctx, Map<String, Object> dash) {
         if (!"harmony".equals(StanceAdvisor.stance(dash))) return StanceAdvisor.UNKNOWN;
         String key = stanceScenarioKey(dash);
         if (key.isEmpty()) return StanceAdvisor.UNKNOWN;
         int scenario = ctx.getSharedPreferences("stance_scenarios", Context.MODE_PRIVATE).getInt(key, 0);
         return scenario >= 0 && scenario <= 3 ? scenario : 0;
+    }
+
+    private static int effectiveStanceScenario(Map<String, Object> dash, int manual) {
+        if (!"harmony".equals(StanceAdvisor.stance(dash))) return StanceAdvisor.UNKNOWN;
+        if (manual != StanceAdvisor.UNKNOWN) return manual;
+        HarmonyBalance comparison = HarmonyBalance.fromDashboard(dash);
+        return comparison != null ? comparison.estimatedScenario() : StanceAdvisor.UNKNOWN;
+    }
+
+    private static int stanceScenario(Context ctx, Map<String, Object> dash) {
+        return effectiveStanceScenario(dash, stanceManualScenario(ctx, dash));
     }
 
     private static View stanceGuideCard(final Context ctx, final Map<String, Object> dash, final String section) {
@@ -1406,7 +1422,7 @@ public final class DashboardCardRenderer {
         text.setOrientation(LinearLayout.VERTICAL);
         card.addView(text);
         final String key = stanceScenarioKey(dash);
-        final int[] selected = {stanceScenario(ctx, dash)};
+        final int[] selected = {stanceManualScenario(ctx, dash)};
         final Button scenarioButton;
         if ("hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)) && !key.isEmpty()) {
             scenarioButton = new Button(ctx);
@@ -1415,18 +1431,27 @@ public final class DashboardCardRenderer {
         final Runnable update = new Runnable() {
             @Override public void run() {
                 text.removeAllViews();
-                List<String> advice = StanceAdvisor.advice(dash, selected[0]);
+                int effective = effectiveStanceScenario(dash, selected[0]);
+                List<String> advice = StanceAdvisor.advice(dash, effective);
                 for (int i = 0; i < advice.size(); i++) {
                     String line = advice.get(i);
                     boolean visible = "hero".equals(section) || i == 0
                             || line.startsWith("Сценарий:") || line.startsWith("Предметы")
                             || line.startsWith("Руны") || line.startsWith("Бонусы")
+                            || ("equipment".equals(section) && line.startsWith("Проверить слот"))
                             || ("equipment".equals(section) && line.startsWith("Надетые"));
                     if (visible) text.addView(bulletLine(ctx, line, "#E0F2F1"));
                 }
                 if (!"hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)))
                     text.addView(bodyText(ctx, "Сценарий сравнения меняется на вкладке «Герой». Старые оценки оптимизаторов не рассчитывают баланс Гармонии.", "#FFE082", 11f));
-                if (scenarioButton != null) scenarioButton.setText("Сценарий: " + StanceAdvisor.scenarioName(selected[0]) + " (сменить)");
+                if ("harmony".equals(StanceAdvisor.stance(dash)) && selected[0] == StanceAdvisor.UNKNOWN) {
+                    text.addView(bodyText(ctx, HarmonyBalance.fromDashboard(dash) == null
+                            ? "Для автоматического предположения нет данных. Можно выбрать условный сценарий на вкладке «Герой»."
+                            : "Сценарий автоматически предполагается по средним ударам из снимка, не по реальному DPS. Вручную можно выбрать другой на вкладке «Герой».", "#FFE082", 11f));
+                }
+                if (scenarioButton != null) scenarioButton.setText(selected[0] == 0
+                        ? "Сценарий: авто по средним ударам (сменить)"
+                        : "Сценарий: " + StanceAdvisor.scenarioName(selected[0]) + " (сменить)");
                 if ("hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)) && key.isEmpty())
                     text.addView(bodyText(ctx, "ID персонажа отсутствует — выбор сценария отключён, чтобы не переносить его на другой аккаунт.", "#FFE082", 11f));
             }

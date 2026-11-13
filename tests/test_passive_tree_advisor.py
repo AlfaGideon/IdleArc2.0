@@ -62,6 +62,16 @@ public class PassiveHarness {
     check(String.join("\n",PassiveTreeAdvisor.recommendations(defenseCfg,0,1,"PUSH","bulwark",0)).contains("defense"),"bulwark avoids dodge");
 
     check(String.join("\n",StanceAdvisor.advice(map("{\"activeCombatStance\":\"bulwark\"}"),0)).contains("отключает уклонение"),"bulwark advice");
+    Map<String,Object> measured = map("{\"activeCombatStance\":\"harmony\",\"attackDamage\":{\"minStr\":\"300\",\"maxStr\":\"500\"},\"bonusStats\":{\"petDamageFinalAvg\":100,\"petDamageFlatBreakdown\":[{\"key\":\"conversion\",\"amountStr\":\"75\"}]}}");
+    HarmonyBalance compare = HarmonyBalance.fromDashboard(measured);
+    check(compare != null && compare.attackShare.intValue()==80 && compare.petShare.intValue()==20,"sheet average share");
+    check(compare.estimatedScenario()==StanceAdvisor.ATTACK_DOMINANT,"automatic weaker-side hypothesis");
+    check(HarmonyBalance.conversionAmount(measured).intValue()==75 && compare.petAverage.intValue()==100,"do not apply conversion twice");
+    check(StanceAdvisor.advice(measured,compare.estimatedScenario()).toString().contains("не DPS"),"not presenting averages as game balance");
+    check(HarmonyBalance.fromDashboard(map("{\"activeCombatStance\":\"harmony\",\"attackDamage\":{\"min\":2,\"max\":1},\"bonusStats\":{\"petDamageFinalAvg\":4}}"))==null,"invalid range");
+    check(HarmonyBalance.fromDashboard(map("{\"activeCombatStance\":\"beastmaster\",\"attackDamage\":{\"min\":1,\"max\":2},\"bonusStats\":{\"petDamageFinalAvg\":4}}"))==null,"no proxy outside harmony");
+    Map<String,Object> large = map("{\"activeCombatStance\":\"harmony\",\"attackDamage\":{\"minStr\":\"100000000000000000000000000000000\",\"maxStr\":\"100000000000000000000000000000000\"},\"bonusStats\":{\"petDamageFinalAvgStr\":\"100000000000000000000000000000000\"}}");
+    check(HarmonyBalance.fromDashboard(large).attackShare.intValue()==50,"large exact numbers");
     check(lines(cfg,0,5,"PUSH").contains("pet_damage_flat"),"druid pet");
     check(lines(cfg,0,1,"PUSH").contains("attack_damage_flat"),"warrior attack");
     check(lines(cfg,0,1,"LEVELING").contains("exp_gain"),"leveling milestone");
@@ -87,7 +97,7 @@ public class PassiveHarness {
             else:
                 self.skipTest("Java compiler unavailable")
             compile_run = subprocess.run(compiler + ["-encoding", "UTF-8", "-d", str(tmp),
-                                          str(source), *(str(SRC / (n + ".java")) for n in ("PassiveTreeAdvisor", "StanceAdvisor", "HarmonyInfo", "SimpleJson", "RuGameDictionary"))],
+                                          str(source), *(str(SRC / (n + ".java")) for n in ("PassiveTreeAdvisor", "StanceAdvisor", "HarmonyBalance", "HarmonyInfo", "SimpleJson", "RuGameDictionary"))],
                                          capture_output=True, text=True)
             self.assertEqual(compile_run.returncode, 0, compile_run.stderr)
             run = subprocess.run([java, "-cp", str(tmp), "com.idlearc.companion.PassiveHarness"], capture_output=True, text=True)
