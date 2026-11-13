@@ -23,7 +23,6 @@ permissions:
 
 jobs:
   build-and-publish-ota:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[apk-only]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -62,7 +61,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          OTA_APK_URL: "https://raw.githubusercontent.com/${{ github.repository }}/v${{ steps.ver.outputs.version_name }}/releases/${{ steps.ver.outputs.apk_name }}"
+          OTA_APK_URL: "https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version_name }}/${{ steps.ver.outputs.apk_name }}"
           OTA_CHANGELOG: ${{ inputs.changelog }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
@@ -103,7 +102,7 @@ jobs:
             echo "::error::Release $TAG already exists; refusing to replace a published APK. Increase the version."
             exit 1
           else
-            gh release create "$TAG" "$APK_FILE" \
+            gh release create "$TAG" "$APK_FILE" releases/ota-manifest.json \
               --target "${{ github.sha }}" \
               --title "IdleArc Druid Helper ${TAG}" \
               --notes "Подписанный OTA-релиз ${TAG} (versionCode ${{ steps.ver.outputs.version_code }})."
