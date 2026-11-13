@@ -275,6 +275,31 @@ public class ApiClientSuite {
         // Примерочная статов (What-If), ROI ресурсов и Детектор До/После
         java.util.List<ApiDashboardEngine.ServerItemAudit> eqList = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
         check(!eqList.isEmpty() && eqList.get(0).positions.get(0).index == 1, "1-based position index");
+        int modelSuggestions = 0;
+        for (ApiDashboardEngine.ServerItemAudit audit : eqList) {
+            for (ApiDashboardEngine.ServerPositionEval row : audit.positions) {
+                if (row.modelAlternative == null) continue;
+                modelSuggestions++;
+                check(!row.isLocked && row.currentType.kind == row.modelAlternative.kind, "model suggestion respects lock and affix kind");
+                check(AffixPositionOptimizer.getCompatiblePool(audit.gearSlot).contains(row.modelAlternative), "model suggestion fits slot");
+                for (ApiDashboardEngine.ServerPositionEval other : audit.positions)
+                    check(other.currentType != row.modelAlternative, "model suggestion avoids duplicates");
+            }
+        }
+        check(modelSuggestions > 0, "legacy druid model produces actionable comparison on synthetic equipment");
+        p.mode = DruidProfile.BuildMode.FARM;
+        java.util.List<ApiDashboardEngine.ServerItemAudit> farmAudits = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
+        boolean modeChangesComparison = false;
+        for (int i = 0; i < eqList.get(0).positions.size(); i++) {
+            if (eqList.get(0).positions.get(i).modelAlternative != farmAudits.get(0).positions.get(i).modelAlternative) modeChangesComparison = true;
+        }
+        check(modeChangesComparison, "farm mode changes at least one model comparison");
+        p.mode = DruidProfile.BuildMode.PUSH;
+        Map<String,Object> lockedDash = SimpleJson.parseObject(syntheticDashboard);
+        Map<String,Object> lockedItem = SimpleJson.asMap(SimpleJson.asList(lockedDash.get("characterEquippedItems")).get(0));
+        Map<String,Object> lockedPos = SimpleJson.asMap(SimpleJson.asList(lockedItem.get("affix_positions")).get(0));
+        SimpleJson.asMap(lockedPos.get("affix")).put("is_locked", true);
+        check(ApiDashboardEngine.analyzeAllEquippedItems(lockedDash, p).get(0).positions.get(0).modelAlternative == null, "no recommendation for a locked position");
         String whatIf = ApiFeatureAnalyzers.simulateWhatIfChange(
             dash, p, eqList.get(0), 2, AffixPositionOptimizer.AffixType.INTELLIGENCE, 0.90);
         check(whatIf.contains("ПРИМЕРОЧНАЯ") && whatIf.contains("Интеллект"), "What-If simulator works");
@@ -330,11 +355,14 @@ public class ApiClientSuite {
         check(!RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).contains(AffixPositionOptimizer.AffixType.DEFENSE_PERCENT), "do not suggest duplicate defense affix");
         posForHarmony.remove(1);
         check(!RetaliationGuide.alternatives(ringForHarmony, posForHarmony.get(0)).contains(AffixPositionOptimizer.AffixType.LOCAL_PERCENT_DEFENSE), "incompatible armor prefix never shown on ring suffix");
+        check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT) == null, "prefix target not shown for suffix-only item");
+        posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(3, AffixPositionOptimizer.AffixType.MAX_HEALTH, "Health", 4, 1, 5, 50, 0, false, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).contains("Урон питомца"), "real ring pet candidate");
         check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT) == AffixPositionOptimizer.AffixType.PET_DAMAGE, "attack-heavy scenario compares pet");
         check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.PET_DOMINANT) == AffixPositionOptimizer.AffixType.ADDED_DAMAGE, "pet-heavy scenario compares attack");
         check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.BALANCED) == null && HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.UNKNOWN) == null, "no forced target when balanced or unknown");
-        check(HarmonyAffixGuide.canCompareRow(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT), posForHarmony.get(0)), "unlocked row highlighted for comparison");
+        check(!HarmonyAffixGuide.canCompareRow(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT), posForHarmony.get(0)), "do not suggest prefix for suffix");
+        check(HarmonyAffixGuide.canCompareRow(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT), posForHarmony.get(1)), "compatible unlocked prefix highlighted");
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.PET_DOMINANT).contains("конверсию"), "flat attack also affects pet");
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(2, AffixPositionOptimizer.AffixType.PET_DAMAGE, "Pet", 4, 1, 5, 50, 0, false, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).isEmpty(), "avoid duplicate affix");

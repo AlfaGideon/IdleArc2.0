@@ -509,13 +509,11 @@ public final class DashboardCardRenderer {
         heroCard.addView(kpiRow);
         root.addView(heroCard);
 
-        root.addView(stanceGuideCard(ctx, dash, "hero"));
-        if (RetaliationGuide.active(dash)) root.addView(retaliationGuideCard(ctx, dash, p));
 
         LinearLayout clsCard = makeCard(ctx, "#141D2B", "#7E57C2");
         clsCard.addView(cardTitle(ctx, hc.icon + " Профиль класса «" + hc.ruName + "» и главный Бонус дропа", "#D1C4E9"));
         clsCard.addView(bodyText(ctx, HeroClassProfile.buildClassGuide(hc, p.mode), "#EDE7F6", 12f));
-        root.addView(clsCard);
+        root.addView(collapsibleCard(ctx, "Профиль класса", clsCard, false));
 
         // 2. Графические прогресс-бары капов + Конверсия оверкапа крита
         LinearLayout capsCard = makeCard(ctx, "#121C24", "#37474F");
@@ -549,7 +547,7 @@ public final class DashboardCardRenderer {
         if (!critNote.isEmpty()) {
             capsCard.addView(bodyText(ctx, "💡 " + critNote, "#FFE082", 11.5f));
         }
-        root.addView(capsCard);
+        root.addView(collapsibleCard(ctx, "Подробные характеристики", capsCard, false));
 
         // 3. Сворачиваемая карточка: 16 серверных корзин урона питомца
         if (bs != null) {
@@ -574,33 +572,9 @@ public final class DashboardCardRenderer {
             }
         }
 
-        // The legacy objective has no retaliation damage and is not a verified optimizer.
-        if (RetaliationGuide.active(dash)) return;
-        // 4. Приоритетный план действий под выбранный режим
-        LinearLayout planCard = makeCard(ctx, "#13221C", "#4CAF50");
-        planCard.addView(cardTitle(ctx, "🚀 Ориентиры старой модели под «" + p.mode.title + "»", "#81C784"));
-        planCard.addView(bodyText(ctx, "Модель не подтверждена для всех классов и не учитывает возмездие. Проценты не являются прогнозом реального прироста.", "#FFE082", 12f));
-        List<ApiDashboardEngine.ServerItemAudit> eqItems = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
-        int shown = 0;
-        for (ApiDashboardEngine.ServerItemAudit it : eqItems) {
-            if (it.totalPotentialGainPct > 0.25 && shown < 5) {
-                shown++;
-                planCard.addView(bulletLine(ctx, String.format(Locale.US,
-                        "%s (%s, T%d +%d): потенциал +%.1f%% (%d поз. на перековку)",
-                        it.slotLabel, it.itemName, it.tier, it.tierLevel,
-                        it.totalPotentialGainPct, it.rerollsNeeded), "#E8F5E9"));
-            }
-        }
-        List<String> freeSwaps = ApiFeatureAnalyzers.findFreeGemSwaps(dash, p);
-        for (String sw : freeSwaps) {
-            if (shown >= 6) break;
-            shown++;
-            planCard.addView(bulletLine(ctx, sw, "#B2FF59"));
-        }
-        if (shown == 0) {
-            planCard.addView(bodyText(ctx, "Модель не нашла вариантов. Это не подтверждает оптимальность сборки.", "#A5D6A7", 12.5f));
-        }
-        root.addView(planCard);
+        LinearLayout next = makeCard(ctx, "#13221C", "#4CAF50");
+        next.addView(bodyText(ctx, "Рекомендации по вещам — вкладка «🛡️ Шмот». Стойка и сценарий — вкладка «⚖ Стойки».", "#E8F5E9", 12f));
+        root.addView(next);
     }
 
     // =========================================================================
@@ -616,30 +590,27 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
-        root.addView(stanceGuideCard(ctx, dash, "equipment"));
         final boolean uncertainHarmony = "harmony".equals(StanceAdvisor.stance(dash));
         final boolean bulwark = RetaliationGuide.active(dash);
-        if (bulwark) root.addView(retaliationGuideCard(ctx, dash, p));
         final int harmonyScenario = stanceScenario(ctx, dash);
-        if (!bulwark && !uncertainHarmony) {
-            LinearLayout note = makeCard(ctx, "#2A2413", "#FFB74D");
-            note.addView(bodyText(ctx, "Внимание: оценки и проценты старой модели эвристические, не доказанный DPS или лучший аффикс для текущего класса. Возмездие в ней не учтено.", "#FFE082", 12f));
-            root.addView(note);
-        }
-        if (uncertainHarmony) {
-            LinearLayout note = makeCard(ctx, "#2A2413", "#FFB74D");
-            note.addView(cardTitle(ctx, "⚠ Как читать подсветку Гармонии", "#FFD180"));
-            note.addView(bodyText(ctx, "Режим: " + (p.mode == null ? "Пуш" : p.mode.title)
-                    + ". Оранжевым отмечены доступные строки для сравнения, а не доказанная лучшая замена. "
-                    + "Сценарий задаётся во вкладке «⚖ Стойки». Для баланса или отсутствующих данных конкретная цель не выбирается. "
-                    + "Режим Пуш/Фарм/Босс пока не меняет эту подсветку. Расчёт влияния перековки на DPS и точную механику Гармонии не подтверждён; сравни цену и потерянные характеристики в игре.", "#FFE0B2", 12f));
-            root.addView(note);
-        }
+        final boolean druidModel = PassiveTreeAdvisor.detectedClass(dash, p.overrideClassId) == 5 && !bulwark;
+        LinearLayout note = makeCard(ctx, "#19231F", "#80CBC4");
+        String modeName = p.mode == null ? "Пуш" : p.mode.title;
+        String context = bulwark
+                ? "Оплот: отмечены защитные характеристики и варианты для сравнения; урон возмездия модель не рассчитывает."
+                : druidModel
+                ? "Друид · " + modeName + ": показаны варианты старой модели. Она приблизительная и не учитывает реальный баланс Гармонии или DPS."
+                : "Для этого класса точного расчёта замен пока нет. Не меняй предметы только по оценке приложения.";
+        note.addView(bodyText(ctx, context + " Подробности — во вкладке «⚖ Стойки».", "#CFD8DC", 12f));
+        root.addView(note);
         List<ApiDashboardEngine.ServerItemAudit> audits = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
+        if (audits.isEmpty()) root.addView(bodyText(ctx, "Нет данных о надетых вещах. Обнови снимок аккаунта.", "#FFE082", 12f));
+        int shownItems = 0;
         for (final ApiDashboardEngine.ServerItemAudit ia : audits) {
             if (filterKey != null && filterKey != ApiDashboardEngine.EquippedSlotKey.ALL && ia.slotKey != filterKey) {
                 continue;
             }
+            shownItems++;
             String tierHex = RuGameDictionary.tierColorHex(ia.tier);
             LinearLayout card = makeCard(ctx, "#121B24", tierHex);
 
@@ -665,14 +636,21 @@ public final class DashboardCardRenderer {
             // Harmony candidates are comparisons only; the old optimizer does not model its balance.
             final AffixPositionOptimizer.AffixType harmonyTarget = uncertainHarmony
                     ? HarmonyAffixGuide.target(ia, harmonyScenario) : null;
+            LinearLayout positionDetails = new LinearLayout(ctx);
+            positionDetails.setOrientation(LinearLayout.VERTICAL);
+            List<String> itemHints = new ArrayList<>();
             for (ApiDashboardEngine.ServerPositionEval pe : ia.positions) {
                 boolean compareHarmony = HarmonyAffixGuide.canCompareRow(harmonyTarget, pe);
-                List<AffixPositionOptimizer.AffixType> retOptions = bulwark ? RetaliationGuide.alternatives(ia, pe) : new ArrayList<AffixPositionOptimizer.AffixType>();
                 boolean retRelevant = bulwark && RetaliationGuide.relevant(pe.currentType);
-                LinearLayout posBox = makeCard(ctx, bulwark ? (retRelevant ? "#13261E" : !retOptions.isEmpty() ? "#302318" : "#15232B")
-                                : uncertainHarmony ? (compareHarmony ? "#302318" : "#15232B") : pe.keepStat ? "#10211B" : "#241B15",
-                        bulwark ? (retRelevant ? "#66BB6A" : !retOptions.isEmpty() ? "#FFB74D" : "#546E7A")
-                                : uncertainHarmony ? (compareHarmony ? "#FFB74D" : "#546E7A") : pe.keepStat ? "#2E7D32" : "#EF6C00");
+                List<AffixPositionOptimizer.AffixType> retOptions = bulwark && !retRelevant
+                        ? RetaliationGuide.alternatives(ia, pe) : new ArrayList<AffixPositionOptimizer.AffixType>();
+                AffixPositionOptimizer.AffixType modelTarget = druidModel && !pe.isLocked ? pe.modelAlternative : null;
+                boolean hasCandidate = compareHarmony || modelTarget != null || !retOptions.isEmpty();
+                if (modelTarget != null) itemHints.add("#" + pe.index + " → " + modelTarget.ruName + " (модель)");
+                else if (compareHarmony) itemHints.add("#" + pe.index + " → " + harmonyTarget.ruName + " (сценарий)");
+                else if (!retOptions.isEmpty()) itemHints.add("#" + pe.index + " → " + retOptions.get(0).ruName + " (сравнить)");
+                LinearLayout posBox = makeCard(ctx, retRelevant ? "#13261E" : hasCandidate ? "#302318" : "#15232B",
+                        retRelevant ? "#66BB6A" : hasCandidate ? "#FFB74D" : "#546E7A");
                 posBox.setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6));
 
                 LinearLayout pTop = row(ctx);
@@ -687,16 +665,16 @@ public final class DashboardCardRenderer {
                 pStat.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 pTop.addView(pStat);
 
-                if (bulwark) {
-                    pTop.addView(badge(ctx, retRelevant ? "ЗАЩИТА" : !retOptions.isEmpty() ? "СРАВНИТЬ" : "НЕТ ОЦЕНКИ", "#243A42", "#FFCC80"));
-                } else if (uncertainHarmony) {
-                    pTop.addView(badge(ctx, compareHarmony ? "⚖ ВАРИАНТ" : "НЕТ ОЦЕНКИ",
-                            compareHarmony ? "#4E2A14" : "#243A42", compareHarmony ? "#FFCC80" : "#B0BEC5"));
-                } else if (pe.keepStat) {
-                    pTop.addView(badge(ctx, "✅ ОСТАВИТЬ", "#1B4332", "#69F0AE"));
+                if (pe.isLocked) {
+                    pTop.addView(badge(ctx, "🔒", "#243A42", "#B0BEC5"));
+                } else if (pe.currentType == AffixPositionOptimizer.AffixType.EMPTY_POSITION) {
+                    pTop.addView(badge(ctx, "ПУСТО", "#243A42", "#B0BEC5"));
+                } else if (retRelevant) {
+                    pTop.addView(badge(ctx, "ЗАЩИТА", "#1B4332", "#A5D6A7"));
+                } else if (hasCandidate) {
+                    pTop.addView(badge(ctx, "СРАВНИТЬ", "#4E2A14", "#FFCC80"));
                 } else {
-                    pTop.addView(badge(ctx, String.format(Locale.US, "🔄 +%.1f%%", Math.max(0.1, pe.netUpgradePct)),
-                            "#4E2A14", "#FFCC80"));
+                    pTop.addView(badge(ctx, "НЕТ СОВЕТА", "#243A42", "#B0BEC5"));
                 }
                 posBox.addView(pTop);
 
@@ -715,25 +693,23 @@ public final class DashboardCardRenderer {
                     posBox.addView(bodyText(ctx, "Варианты для сравнения: " + join(names, ", ")
                             + ". Не оценены потери, доступность и стоимость перековки.", "#FFE082", 11.5f));
                 }
-                if (compareHarmony) {
-                    posBox.addView(bodyText(ctx, "Сравни с «" + harmonyTarget.ruName
-                            + "»; эта строка не выбрана как лучшая для замены.", "#FFE082", 11.5f));
+                if (modelTarget != null) {
+                    posBox.addView(bodyText(ctx, "По старой модели сравни с «" + modelTarget.ruName
+                            + "». Это не гарантия улучшения.", "#FFD54F", 11.5f));
                 }
-                if (!uncertainHarmony && !bulwark && !pe.keepStat && pe.recommendedType != null) {
-                    posBox.addView(bodyText(ctx, "👉 Лучшая замена: " + pe.recommendedType.taggedName(),
-                            "#FFD54F", 11.5f));
+                if (compareHarmony && harmonyTarget != modelTarget) {
+                    posBox.addView(bodyText(ctx, "По сценарию Гармонии сравни с «" + harmonyTarget.ruName + "».", "#FFE082", 11.5f));
                 }
-                card.addView(posBox);
+                positionDetails.addView(posBox);
             }
-
-            if (uncertainHarmony) {
-                String suggestion = HarmonyAffixGuide.candidate(ia, harmonyScenario);
-                if (!suggestion.isEmpty()) card.addView(bodyText(ctx, suggestion, "#FFE082", 12f));
+            if (itemHints.isEmpty()) {
+                card.addView(bodyText(ctx, ia.positions.isEmpty() ? "Нет данных об аффиксах." : "Нет подходящего варианта для сравнения.", "#B0BEC5", 12f));
+            } else {
+                card.addView(bodyText(ctx, "🔎 " + join(itemHints.subList(0, Math.min(2, itemHints.size())), " · ")
+                        + (itemHints.size() > 2 ? " · ещё " + (itemHints.size() - 2) : ""), "#FFD180", 12f));
             }
-
-            if (!uncertainHarmony && !bulwark && ia.awakenAdvice != null && !ia.awakenAdvice.isEmpty()) {
-                card.addView(bodyText(ctx, ia.awakenAdvice, "#CE93D8", 11.5f));
-            }
+            boolean singleSlot = filterKey != null && filterKey != ApiDashboardEngine.EquippedSlotKey.ALL;
+            if (!ia.positions.isEmpty()) card.addView(collapsibleCard(ctx, "Аффиксы: " + ia.slotLabel, positionDetails, singleSlot));
 
             // Кнопка интерактивной «Примерочной статов» (What-If)
             LinearLayout btnRow = row(ctx);
@@ -746,9 +722,11 @@ public final class DashboardCardRenderer {
                 }
             });
             btnRow.addView(whatIfBtn);
-            if (!uncertainHarmony && !bulwark) card.addView(btnRow);
+            if (druidModel && !uncertainHarmony) card.addView(btnRow);
             root.addView(card);
         }
+        if (!audits.isEmpty() && shownItems == 0)
+            root.addView(bodyText(ctx, "В выбранном слоте нет надетого предмета в снимке.", "#B0BEC5", 12f));
     }
 
     private static void showWhatIfDialog(final Context ctx,
@@ -890,9 +868,7 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
-        root.addView(stanceGuideCard(ctx, dash, "bag"));
         if (RetaliationGuide.active(dash)) {
-            root.addView(retaliationGuideCard(ctx, dash, p));
             renderRetaliationInventory(ctx, root, dash, p);
             return;
         }
@@ -1185,8 +1161,6 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
-        root.addView(stanceGuideCard(ctx, dash, "gems"));
-        if (RetaliationGuide.active(dash)) root.addView(retaliationGuideCard(ctx, dash, p));
 
         // 1. Баннер бесплатной перестановки камней (0 ресурсов!)
         List<String> swaps = ApiFeatureAnalyzers.findFreeGemSwaps(dash, p);
@@ -1310,8 +1284,6 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
-        root.addView(stanceGuideCard(ctx, dash, "pets"));
-        if (RetaliationGuide.active(dash)) root.addView(retaliationGuideCard(ctx, dash, p));
 
         // 0. Глубокий оптимизатор аффиксов питомцев (Уровень + Капы + Самоцветы + Класс)
         BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(
@@ -1449,8 +1421,6 @@ public final class DashboardCardRenderer {
                                                DruidProfile p,
                                                Map<String, Object> gameCfg) {
         root.removeAllViews();
-        if (dash != null) root.addView(stanceGuideCard(ctx, dash, "skills"));
-        if (RetaliationGuide.active(dash)) root.addView(retaliationGuideCard(ctx, dash, p));
         root.addView(passiveTreeCard(ctx, dash, p, gameCfg));
         if (dash == null || p == null) {
             root.addView(emptySyncCard(ctx));
@@ -1521,11 +1491,14 @@ public final class DashboardCardRenderer {
         intro.addView(cardTitle(ctx, "⚖ Боевые стойки", "#80CBC4"));
         intro.addView(bodyText(ctx, "Режим расчёта: " + (p == null || p.mode == null ? "Пуш" : p.mode.title)
                 + ". Это не переключатель стойки в игре. После смены стойки в игре обнови снимок.", "#CFD8DC", 12f));
-        intro.addView(bulletLine(ctx, "Гармония — гибрид атаки и питомца; баланс ниже является ориентиром, не DPS.", "#E0F2F1"));
-        intro.addView(bulletLine(ctx, "Агрессивная — направление атаки героя.", "#E0F2F1"));
-        intro.addView(bulletLine(ctx, "Повелитель зверей — направление питомца.", "#E0F2F1"));
-        intro.addView(bulletLine(ctx, "Оплот — защита и возмездие, без уклонения.", "#E0F2F1"));
         root.addView(intro);
+        LinearLayout overview = new LinearLayout(ctx);
+        overview.setOrientation(LinearLayout.VERTICAL);
+        overview.addView(bulletLine(ctx, "Гармония — гибрид атаки и питомца.", "#E0F2F1"));
+        overview.addView(bulletLine(ctx, "Агрессивная — направление атаки героя.", "#E0F2F1"));
+        overview.addView(bulletLine(ctx, "Повелитель зверей — направление питомца.", "#E0F2F1"));
+        overview.addView(bulletLine(ctx, "Оплот — защита и возмездие, без уклонения.", "#E0F2F1"));
+        root.addView(collapsibleCard(ctx, "Справка по стойкам", overview, false));
         root.addView(stanceGuideCard(ctx, dash, "stances"));
         if (RetaliationGuide.active(dash)) root.addView(retaliationGuideCard(ctx, dash, p));
     }
@@ -1572,17 +1545,14 @@ public final class DashboardCardRenderer {
                 text.removeAllViews();
                 int effective = effectiveStanceScenario(dash, selected[0]);
                 List<String> advice = StanceAdvisor.advice(dash, effective);
+                LinearLayout details = new LinearLayout(ctx);
+                details.setOrientation(LinearLayout.VERTICAL);
                 for (int i = 0; i < advice.size(); i++) {
                     String line = advice.get(i);
-                    boolean visible = "hero".equals(section) || "stances".equals(section) || i == 0
-                            || line.startsWith("Сценарий:") || line.startsWith("Предметы")
-                            || line.startsWith("Руны") || line.startsWith("Бонусы")
-                            || ("equipment".equals(section) && line.startsWith("Проверить слот"))
-                            || ("equipment".equals(section) && line.startsWith("Надетые"));
-                    if (visible) text.addView(bulletLine(ctx, line, "#E0F2F1"));
+                    if (i == 0 || line.startsWith("Сценарий:")) text.addView(bulletLine(ctx, line, "#E0F2F1"));
+                    else if (!RetaliationGuide.active(dash)) details.addView(bulletLine(ctx, line, "#E0F2F1"));
                 }
-                if (!"hero".equals(section) && !"stances".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)))
-                    text.addView(bodyText(ctx, "Сценарий сравнения меняется на вкладке «Стойки». Старые оценки оптимизаторов не рассчитывают баланс Гармонии.", "#FFE082", 11f));
+                if (details.getChildCount() > 0) text.addView(collapsibleCard(ctx, "Подробности и данные", details, false));
                 if ("harmony".equals(StanceAdvisor.stance(dash)) && selected[0] == StanceAdvisor.UNKNOWN) {
                     text.addView(bodyText(ctx, HarmonyBalance.fromDashboard(dash) == null
                             ? "Для автоматического предположения нет данных. Можно выбрать условный сценарий на вкладке «Стойки»."

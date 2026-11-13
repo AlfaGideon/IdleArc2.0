@@ -13,7 +13,9 @@ public final class HarmonyAffixGuide {
     }
     public static boolean canCompareRow(AffixPositionOptimizer.AffixType target,
                                         ApiDashboardEngine.ServerPositionEval row) {
-        return target != null && row != null && !row.isLocked;
+        return target != null && row != null && row.currentType != null && !row.isLocked
+                && row.currentType != AffixPositionOptimizer.AffixType.EMPTY_POSITION
+                && row.currentType.kind == target.kind;
     }
 
     /** A type from the slot pool to compare, not a recommendation to remove a particular row. */
@@ -27,7 +29,7 @@ public final class HarmonyAffixGuide {
         boolean unlocked = false;
         for (ApiDashboardEngine.ServerPositionEval p : item.positions) {
             if (p.currentType == target) return null;
-            if (!p.isLocked) unlocked = true;
+            if (canCompareRow(target, p)) unlocked = true;
         }
         return unlocked ? target : null;
     }

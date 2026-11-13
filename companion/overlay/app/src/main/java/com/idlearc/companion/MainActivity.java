@@ -66,16 +66,18 @@ public class MainActivity extends Activity {
     private Button[] slotChipButtons;
 
     private int activeTab = 0;
+    private boolean showMoreTabs = false;
+    private Button moreTabsButton;
     private ApiDashboardEngine.EquippedSlotKey selectedEquipSlot = ApiDashboardEngine.EquippedSlotKey.ALL;
 
     private static final String[] TAB_TITLES = {
         "🔔 Радар",
         "📊 Герой",
-        "🛡️ Шмот (10)",
-        "🎒 Сумка и ROI",
-        "💎 Камни (20)",
-        "🐾 Петы и Тал.",
-        "🌳 Навыки и Мир",
+        "🛡️ Шмот",
+        "🎒 Сумка",
+        "💎 Камни",
+        "🐾 Питомцы",
+        "🌳 Навыки",
         "⚖ Стойки"
     };
 
@@ -246,11 +248,34 @@ public class MainActivity extends Activity {
 
         // 3. Горизонтальная лента 7 вкладок
         HorizontalScrollView tabScroll = new HorizontalScrollView(this);
-        tabScroll.setHorizontalScrollBarEnabled(false);
+        tabScroll.setHorizontalScrollBarEnabled(true);
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
         tabRow.setPadding(0, 0, 0, dp(8));
-        for (int i = 0; i < TAB_TITLES.length; i++) {
+        int[] tabOrder = {0, 1, 2, 7, 3, 4, 5, 6};
+        for (int position = 0; position < tabOrder.length; position++) {
+            final int i = tabOrder[position];
+            if (position == 4) {
+                moreTabsButton = new Button(this);
+                moreTabsButton.setAllCaps(false);
+                moreTabsButton.setTextSize(12f);
+                moreTabsButton.setMinimumHeight(0);
+                moreTabsButton.setMinHeight(0);
+                moreTabsButton.setPadding(dp(11), dp(7), dp(11), dp(7));
+                moreTabsButton.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showMoreTabs = !showMoreTabs;
+                        if (!showMoreTabs && activeTab >= 3 && activeTab <= 6) {
+                            activeTab = 1;
+                            if (liveEnabled) LiveSyncManager.get().setTab(MainActivity.this, activeTab);
+                        }
+                        refreshAllViews();
+                        tabScroll.post(new Runnable() { @Override public void run() {
+                            tabScroll.smoothScrollTo(showMoreTabs ? tabButtons[3].getLeft() : 0, 0);
+                        }});
+                    }
+                });
+            }
             final int tabIdx = i;
             Button tb = new Button(this);
             tb.setText(TAB_TITLES[i]);
@@ -274,7 +299,11 @@ public class MainActivity extends Activity {
             tabRow.addView(tb, tlp);
         }
         tabScroll.addView(tabRow);
-        root.addView(tabScroll);
+        LinearLayout tabStrip = new LinearLayout(this);
+        tabStrip.setOrientation(LinearLayout.HORIZONTAL);
+        tabStrip.addView(tabScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tabStrip.addView(moreTabsButton);
+        root.addView(tabStrip);
 
         // 4. Под-фильтр слотов для вкладки «🛡️ Шмот (10)»
         slotChipScroll = new HorizontalScrollView(this);
@@ -598,7 +627,9 @@ public class MainActivity extends Activity {
         }
 
         // Подсветка вкладок
+        if (moreTabsButton != null) moreTabsButton.setText(showMoreTabs ? "Ещё ▴" : "Ещё ▾");
         for (int i = 0; i < tabButtons.length; i++) {
+            tabButtons[i].setVisibility(i >= 3 && i <= 6 && !showMoreTabs ? View.GONE : View.VISIBLE);
             boolean sel = (activeTab == i);
             styleChip(tabButtons[i], sel ? "#1A374D" : "#121C24", sel ? "#4FC3F7" : "#90A4AE", sel);
         }

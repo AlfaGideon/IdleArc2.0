@@ -59,6 +59,8 @@ public class ApiDashboardEngine {
         public final double netUpgradePct;
         public final double numericRerollUpsidePct;
         public final List<String> topAlternatives;
+        // Comparison from the legacy model, restricted to the same affix kind and slot pool.
+        public final AffixPositionOptimizer.AffixType modelAlternative;
 
         public ServerPositionEval(int index,
                                   AffixPositionOptimizer.AffixType currentType,
@@ -75,6 +77,17 @@ public class ApiDashboardEngine {
                                   double netUpgradePct,
                                   double numericRerollUpsidePct,
                                   List<String> topAlternatives) {
+            this(index, currentType, rawServerName, currentValue, rangeMin, rangeMax, rollQualityPct,
+                    boostCount, isLocked, isInfernal, keepStat, recommendedType, netUpgradePct,
+                    numericRerollUpsidePct, topAlternatives, null);
+        }
+
+        public ServerPositionEval(int index, AffixPositionOptimizer.AffixType currentType,
+                                  String rawServerName, double currentValue, double rangeMin, double rangeMax,
+                                  double rollQualityPct, int boostCount, boolean isLocked, boolean isInfernal,
+                                  boolean keepStat, AffixPositionOptimizer.AffixType recommendedType,
+                                  double netUpgradePct, double numericRerollUpsidePct, List<String> topAlternatives,
+                                  AffixPositionOptimizer.AffixType modelAlternative) {
             this.index = index;
             this.currentType = currentType;
             this.rawServerName = rawServerName;
@@ -90,6 +103,7 @@ public class ApiDashboardEngine {
             this.netUpgradePct = netUpgradePct;
             this.numericRerollUpsidePct = numericRerollUpsidePct;
             this.topAlternatives = topAlternatives;
+            this.modelAlternative = modelAlternative;
         }
     }
 
@@ -996,10 +1010,21 @@ public class ApiDashboardEngine {
                 top3Text.add(String.format(Locale.US, "%s (%+.2f%%)", alt.type.taggedName(), dPct));
             }
 
+            // Compare only currently unlocked, populated rows against free alternatives of
+            // the same prefix/suffix kind. This remains a heuristic, not a DPS forecast.
+            AffixPositionOptimizer.AffixType modelAlternative = null;
+            if (!rp.locked && rp.type != AffixPositionOptimizer.AffixType.EMPTY_POSITION) {
+                for (RankedPoolCandidate alt : posAlts) {
+                    if (alt.type != rp.type && alt.type.kind == rp.type.kind && alt.gainPct > curGain + 0.03) {
+                        modelAlternative = alt.type;
+                        break;
+                    }
+                }
+            }
             posResults.add(new ServerPositionEval(
                     rp.index, rp.type, rp.rawName, rp.value, rp.rangeMin, rp.rangeMax,
                     rp.rollQuality, rp.boostCount, rp.locked, rp.infernal,
-                    keep, recType, netDelta, numRerollUpside, top3Text));
+                    keep, recType, netDelta, numRerollUpside, top3Text, modelAlternative));
         }
 
         String awkNote = totalBoostHits > 0

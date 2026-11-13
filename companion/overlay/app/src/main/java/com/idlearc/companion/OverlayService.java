@@ -40,6 +40,7 @@ public class OverlayService extends Service {
 
     private static final String CHANNEL_ID = "druid_helper_api_v31";
     private static final int NOTIF_ID = 4203;
+    private static final String ACTION_CLOSE = "com.idlearc.companion.CLOSE_WIDGET";
     private static volatile boolean running = false;
 
     private WindowManager wm;
@@ -75,6 +76,8 @@ public class OverlayService extends Service {
     };
 
     private int activeTab = 0;
+    private boolean showMoreTabs = false;
+    private Button moreTabsButton;
     private ApiDashboardEngine.EquippedSlotKey selectedSlot = ApiDashboardEngine.EquippedSlotKey.ALL;
 
     private TextView headerSubTv;
@@ -155,6 +158,7 @@ public class OverlayService extends Service {
         rootContainer.addView(bubbleView);
         rootContainer.addView(cardView);
         wm.addView(rootContainer, winParams);
+        clampAfterLayout();
         if (autoSyncSec == 1) LiveSyncManager.get().add(this, this, liveListener, -1);
         else if (autoSyncSec > 0) uiHandler.postDelayed(autoSyncRunnable, autoSyncSec * 1000L);
         refreshPanelContent();
@@ -162,6 +166,10 @@ public class OverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_CLOSE.equals(intent.getAction())) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         profile = DruidProfile.load(this);
         refreshPanelContent();
         return START_STICKY;
@@ -182,6 +190,8 @@ public class OverlayService extends Service {
     }
 
     private View buildBubbleView() {
+        FrameLayout bubble = new FrameLayout(this);
+        bubble.setLayoutParams(new FrameLayout.LayoutParams(dp(78), dp(54)));
         ImageView iv = new ImageView(this);
         iv.setImageResource(R.drawable.ic_app_medallion);
         int sz = dp(50);
@@ -203,6 +213,7 @@ public class OverlayService extends Service {
                 cardView.setVisibility(View.VISIBLE);
                 if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, activeTab);
                 wm.updateViewLayout(rootContainer, winParams);
+                clampAfterLayout();
                 refreshPanelContent();
                 if (IdleArcApiClient.hasSavedCredentials(OverlayService.this)) {
                     long ageMs = System.currentTimeMillis() - IdleArcApiClient.getLastSyncTimeMs();
@@ -212,7 +223,16 @@ public class OverlayService extends Service {
                 }
             }
         });
-        return iv;
+        bubble.addView(iv);
+        Button close = miniBtn("✕", "#7B2229", "#FFFFFF");
+        close.setTextSize(15f);
+        close.setContentDescription("Закрыть виджет");
+        FrameLayout.LayoutParams closeLp = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.END);
+        bubble.addView(close, closeLp);
+        close.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { stopSelf(); }
+        });
+        return bubble;
     }
 
     private LinearLayout buildExpandedCardView() {
@@ -282,9 +302,17 @@ public class OverlayService extends Service {
                 if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, -1);
                 bubbleView.setVisibility(View.VISIBLE);
                 wm.updateViewLayout(rootContainer, winParams);
+                clampAfterLayout();
             }
         });
-        topBar.addView(minBtn);
+        minBtn.setContentDescription("Свернуть виджет");
+        topBar.addView(minBtn, marginRightLp(4));
+        Button closeBtn = miniBtn("✕", "#7B2229", "#FFFFFF");
+        closeBtn.setContentDescription("Закрыть виджет");
+        closeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { stopSelf(); }
+        });
+        topBar.addView(closeBtn);
         panel.addView(topBar);
 
         // 2. Режим расчёта (Пуш / Фарм / Босс)
@@ -312,11 +340,29 @@ public class OverlayService extends Service {
 
         // 3. Лента 7 вкладок
         HorizontalScrollView tabScroll = new HorizontalScrollView(this);
-        tabScroll.setHorizontalScrollBarEnabled(false);
+        tabScroll.setHorizontalScrollBarEnabled(true);
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
         tabRow.setPadding(0, 0, 0, dp(5));
-        for (int i = 0; i < TAB_TITLES.length; i++) {
+        int[] tabOrder = {0, 1, 2, 7, 3, 4, 5, 6};
+        for (int position = 0; position < tabOrder.length; position++) {
+            final int i = tabOrder[position];
+            if (position == 4) {
+                moreTabsButton = miniBtn("Ещё ▾", "#253442", "#FFFFFF");
+                moreTabsButton.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        showMoreTabs = !showMoreTabs;
+                        if (!showMoreTabs && activeTab >= 3 && activeTab <= 6) {
+                            activeTab = 1;
+                            if (autoSyncSec == 1) LiveSyncManager.get().setTab(OverlayService.this, activeTab);
+                        }
+                        refreshPanelContent();
+                        tabScroll.post(new Runnable() { @Override public void run() {
+                            tabScroll.smoothScrollTo(showMoreTabs ? tabButtons[3].getLeft() : 0, 0);
+                        }});
+                    }
+                });
+            }
             final int tIdx = i;
             Button tb = miniBtn(TAB_TITLES[i], "#121C24", "#90A4AE");
             tb.setOnClickListener(new View.OnClickListener() {
@@ -331,7 +377,11 @@ public class OverlayService extends Service {
             tabRow.addView(tb, marginRightLp(4));
         }
         tabScroll.addView(tabRow);
-        panel.addView(tabScroll);
+        LinearLayout tabStrip = new LinearLayout(this);
+        tabStrip.setOrientation(LinearLayout.HORIZONTAL);
+        tabStrip.addView(tabScroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tabStrip.addView(moreTabsButton);
+        panel.addView(tabStrip);
 
         // 4. Под-чипы 10 слотов для вкладки «🛡️ Шмот»
         slotChipScroll = new HorizontalScrollView(this);
@@ -475,7 +525,9 @@ public class OverlayService extends Service {
             boolean sel = (profile.mode == modes[i]);
             styleMini(modeButtons[i], sel ? "#1B4B3A" : "#121D27", sel ? "#69F0AE" : "#90A4AE", sel);
         }
+        if (moreTabsButton != null) moreTabsButton.setText(showMoreTabs ? "Ещё ▴" : "Ещё ▾");
         for (int i = 0; i < tabButtons.length; i++) {
+            tabButtons[i].setVisibility(i >= 3 && i <= 6 && !showMoreTabs ? View.GONE : View.VISIBLE);
             boolean sel = (activeTab == i);
             styleMini(tabButtons[i], sel ? "#1A374D" : "#121C24", sel ? "#4FC3F7" : "#90A4AE", sel);
         }
@@ -587,6 +639,7 @@ public class OverlayService extends Service {
                         if (moved) {
                             winParams.x = startX + dx;
                             winParams.y = startY + dy;
+                            clampPosition();
                             wm.updateViewLayout(rootContainer, winParams);
                         }
                         return true;
@@ -597,6 +650,23 @@ public class OverlayService extends Service {
                         return true;
                 }
                 return false;
+            }
+        });
+    }
+
+    private void clampPosition() {
+        if (rootContainer == null || winParams == null) return;
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        winParams.x = Math.max(0, Math.min(winParams.x, Math.max(0, dm.widthPixels - rootContainer.getWidth())));
+        winParams.y = Math.max(0, Math.min(winParams.y, Math.max(0, dm.heightPixels - rootContainer.getHeight())));
+    }
+
+    private void clampAfterLayout() {
+        rootContainer.post(new Runnable() {
+            @Override public void run() {
+                if (!running || rootContainer == null || !rootContainer.isAttachedToWindow()) return;
+                clampPosition();
+                wm.updateViewLayout(rootContainer, winParams);
             }
         });
     }
@@ -613,6 +683,8 @@ public class OverlayService extends Service {
                 ? PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
                 : PendingIntent.FLAG_UPDATE_CURRENT;
         PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, piFlags);
+        Intent closeIntent = new Intent(this, OverlayService.class).setAction(ACTION_CLOSE);
+        PendingIntent closePi = PendingIntent.getService(this, 1, closeIntent, piFlags);
 
         Notification.Builder nb = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID)
@@ -621,6 +693,7 @@ public class OverlayService extends Service {
                 .setContentText("Мультиклассовый помощник, Сумка и Будильник откатов активны")
                 .setSmallIcon(android.R.drawable.ic_menu_compass)
                 .setContentIntent(pi)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Закрыть виджет", closePi)
                 .setOngoing(true)
                 .build();
         startForeground(NOTIF_ID, n);
