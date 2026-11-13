@@ -120,7 +120,11 @@ jobs:
           fetch_mirror() {
             local path="$1" output="$2" attempt
             for attempt in 1 2 3 4 5; do
-              if gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > "$output" 2> /tmp/ota-mirror-error; then
+              # gh api on some runner versions tries to transcode binary APKs
+              # and fails with "transform: short source buffer"; curl is binary-safe.
+              if curl --fail --silent --show-error --location \
+                -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw+json' \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$path?ref=$MIRROR_SHA" > "$output" 2> /tmp/ota-mirror-error; then
                 return 0
               fi
               echo "Mirror fetch failed for $path (attempt $attempt/5)" >&2
