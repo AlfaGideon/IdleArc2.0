@@ -1,8 +1,8 @@
 {
-  "versionCode": 540,
-  "versionName": "5.4.0",
-  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.4.0/releases/IdleArcHelper-v5.4.0.apk",
-  "sha256": "16b762753794eed378b7ddaac39f5e6c0890dca44525adf224fe6d0d4432719d",
-  "sizeBytes": 472186,
-  "changelog": "v5.4.0: исправлена проверка OTA и добавлено проверяемое резервное зеркало обновлений. Сохранены подсказки по Гармонии и слотам."
+  "versionCode": 550,
+  "versionName": "5.5.0",
+  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.5.0/releases/IdleArcHelper-v5.5.0.apk",
+  "sha256": "3ace8ff273cab29daa2b76448ca4a0cc3b95963f411d33270a9af5050f56bb59",
+  "sizeBytes": 472185,
+  "changelog": "v5.5.0: отдельная вкладка стоек и подсветка строк для сравнения аффиксов в Гармонии. Подсветка — ориентир, а не расчёт лучшей перековки или DPS."
 }
