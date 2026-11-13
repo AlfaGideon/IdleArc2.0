@@ -83,7 +83,7 @@ public class OverlayService extends Service {
     private LinearLayout cardsContainer;
     private HorizontalScrollView slotChipScroll;
     private final Button[] modeButtons = new Button[DruidProfile.BuildMode.values().length];
-    private final Button[] tabButtons = new Button[7];
+    private final Button[] tabButtons = new Button[8];
     private Button[] slotChipButtons;
 
     private static final String[] TAB_TITLES = {
@@ -93,7 +93,8 @@ public class OverlayService extends Service {
         "🎒 Сумка",
         "💎 Камни",
         "🐾 Петы",
-        "🌳 Навыки"
+        "🌳 Навыки",
+        "⚖ Стойки"
     };
 
     private final Runnable autoSyncRunnable = new Runnable() {
@@ -519,8 +520,13 @@ public class OverlayService extends Service {
                 DashboardCardRenderer.renderPetsAndTalismansTab(this, cardsContainer, dash, profile);
                 break;
             case 6:
-            default:
                 DashboardCardRenderer.renderSkillsAndWorldTab(this, cardsContainer, dash, profile, cfg);
+                break;
+            case 7:
+                DashboardCardRenderer.renderStancesTab(this, cardsContainer, dash, profile);
+                break;
+            default:
+                DashboardCardRenderer.renderRadarTab(this, cardsContainer, dash, profile, cb);
                 break;
         }
     }

@@ -317,12 +317,17 @@ public class ApiClientSuite {
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(1, AffixPositionOptimizer.AffixType.GOLD_GAIN, "Gold", 4, 1, 5, 50, 0, false, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         ApiDashboardEngine.ServerItemAudit ringForHarmony = new ApiDashboardEngine.ServerItemAudit(ApiDashboardEngine.EquippedSlotKey.RING_1, SlotAffixAdvisor.GearSlot.RING, "кольцо", "кольцо", 1, 1, 0, 10, 0, 0, "", "", posForHarmony, 0, 0, "");
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).contains("Урон питомца"), "real ring pet candidate");
+        check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT) == AffixPositionOptimizer.AffixType.PET_DAMAGE, "attack-heavy scenario compares pet");
+        check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.PET_DOMINANT) == AffixPositionOptimizer.AffixType.ADDED_DAMAGE, "pet-heavy scenario compares attack");
+        check(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.BALANCED) == null && HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.UNKNOWN) == null, "no forced target when balanced or unknown");
+        check(HarmonyAffixGuide.canCompareRow(HarmonyAffixGuide.target(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT), posForHarmony.get(0)), "unlocked row highlighted for comparison");
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.PET_DOMINANT).contains("конверсию"), "flat attack also affects pet");
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(2, AffixPositionOptimizer.AffixType.PET_DAMAGE, "Pet", 4, 1, 5, 50, 0, false, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).isEmpty(), "avoid duplicate affix");
         posForHarmony.clear();
         posForHarmony.add(new ApiDashboardEngine.ServerPositionEval(1, AffixPositionOptimizer.AffixType.GOLD_GAIN, "Gold", 4, 1, 5, 50, 0, true, false, false, null, 0, 0, new java.util.ArrayList<String>()));
         check(HarmonyAffixGuide.candidate(ringForHarmony, StanceAdvisor.ATTACK_DOMINANT).isEmpty(), "no suggestion when all rows locked");
+        check(!HarmonyAffixGuide.canCompareRow(AffixPositionOptimizer.AffixType.PET_DAMAGE, posForHarmony.get(0)), "locked row is not highlighted");
         ApiDashboardEngine.ServerItemAudit helmForHarmony = new ApiDashboardEngine.ServerItemAudit(ApiDashboardEngine.EquippedSlotKey.HELMET, SlotAffixAdvisor.GearSlot.HELMET, "шлем", "шлем", 1, 1, 0, 10, 0, 0, "", "", posForHarmony, 0, 0, "");
         check(HarmonyAffixGuide.candidate(helmForHarmony, StanceAdvisor.PET_DOMINANT).isEmpty(), "no incompatible slot candidate");
 

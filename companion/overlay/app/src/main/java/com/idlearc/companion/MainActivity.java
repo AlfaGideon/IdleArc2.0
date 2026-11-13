@@ -62,7 +62,7 @@ public class MainActivity extends Activity {
     private LinearLayout cardsContainer;
     private HorizontalScrollView slotChipScroll;
     private final Button[] modeButtons = new Button[DruidProfile.BuildMode.values().length];
-    private final Button[] tabButtons = new Button[7];
+    private final Button[] tabButtons = new Button[8];
     private Button[] slotChipButtons;
 
     private int activeTab = 0;
@@ -75,7 +75,8 @@ public class MainActivity extends Activity {
         "🎒 Сумка и ROI",
         "💎 Камни (20)",
         "🐾 Петы и Тал.",
-        "🌳 Навыки и Мир"
+        "🌳 Навыки и Мир",
+        "⚖ Стойки"
     };
 
     @Override
@@ -643,8 +644,13 @@ public class MainActivity extends Activity {
                 DashboardCardRenderer.renderPetsAndTalismansTab(this, cardsContainer, dash, profile);
                 break;
             case 6:
-            default:
                 DashboardCardRenderer.renderSkillsAndWorldTab(this, cardsContainer, dash, profile, cfg);
+                break;
+            case 7:
+                DashboardCardRenderer.renderStancesTab(this, cardsContainer, dash, profile);
+                break;
+            default:
+                DashboardCardRenderer.renderRadarTab(this, cardsContainer, dash, profile, cb);
                 break;
         }
     }
