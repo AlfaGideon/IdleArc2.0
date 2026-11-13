@@ -354,6 +354,17 @@ public final class BagAndPetAdvisor {
                 reason = explainWhyDropBonusIsTrashForClass(dbt, dbRu, dbv, hc, p);
             }
 
+            // Не уничтожать базы атаки/питомца только по классу: стойка и гибрид
+            // могут сделать обе стороны полезными, а точного симулятора здесь нет.
+            if ("harmony".equals(StanceAdvisor.stance(dash))
+                    && ("fierce".equals(dbt) || "companions".equals(dbt))) {
+                action = locked ? ItemBagAction.KEEP_LOCKED : ItemBagAction.KEEP_UPGRADE_BASE;
+                reason = "Сохрани для ручного сравнения под Гармонию: вклад вещи в баланс и DPS не рассчитан.";
+            } else if (action == ItemBagAction.SALVAGE_DESTROY && !StanceAdvisor.stance(dash).isEmpty()
+                    && ("fierce".equals(dbt) || "companions".equals(dbt))) {
+                action = ItemBagAction.KEEP_UPGRADE_BASE;
+                reason = "Сохрани для ручного сравнения под текущую стойку: вклад вещи в DPS не рассчитан.";
+            }
             if (action == ItemBagAction.SALVAGE_DESTROY) {
                 salvageCnt++;
             } else {
@@ -670,6 +681,12 @@ public final class BagAndPetAdvisor {
                         + " → разбери на +" + dust + " Пыли самоцветов!";
             }
 
+            if ("harmony".equals(StanceAdvisor.stance(dash))) {
+                if (action == GemBagAction.SOCKET_NOW) upgCnt--;
+                if (action == GemBagAction.SALVAGE_DUST) { salvCnt--; totalDust -= dust; }
+                action = GemBagAction.KEEP_RESERVE;
+                reason = "Для Гармонии влияние камня на баланс не рассчитано — сравни вручную перед слиянием или разбором.";
+            }
             entries.add(new BagGemEntry(titleRu, famSlug, famHex, rarTier, qual, pristine, locked,
                     secParts.isEmpty() ? "Без доп. свойств" : join(secParts, " · "),
                     dust, action, reason));

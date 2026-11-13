@@ -505,36 +505,8 @@ public final class DashboardCardRenderer {
         heroCard.addView(kpiRow);
         root.addView(heroCard);
 
-        // Harmony values come from the snapshot and already include the current stance.
-        HarmonyInfo harmony = HarmonyInfo.fromDashboard(dash);
-        if (hc == HeroClassProfile.HeroClass.DRUID || harmony.active) {
-            LinearLayout harmonyCard = makeCard(ctx, "#11252A", "#4DB6AC");
-            harmonyCard.addView(cardTitle(ctx, "⚖ Гармония", "#80CBC4"));
-            if (Double.isFinite(harmony.maximumBonusPct)) {
-                String mlLabel = harmony.monsterLevel > 0 ? " · ML " + harmony.monsterLevel : "";
-                harmonyCard.addView(bodyText(ctx, "Максимум при балансе 50/50: "
-                        + HarmonyInfo.formatMultiplier(harmony.maximumBonusPct) + mlLabel, "#80CBC4", 13f));
-                harmonyCard.addView(bodyText(ctx, "Потолок из API: +"
-                        + (harmony.maximumBonusPct >= 1e9
-                           ? String.format(Locale.US, "%.3e%%", harmony.maximumBonusPct)
-                           : String.format(Locale.US, "%.1f%%", harmony.maximumBonusPct))
-                        + ". Он зависит от текущих условий игры и обновляется со снимком API.", "#B0BEC5", 11.5f));
-            }
-            if (harmony.active && !Double.isFinite(harmony.maximumBonusPct)) {
-                harmonyCard.addView(bodyText(ctx, "Максимум при балансе 50/50: — (нет данных API)", "#B0BEC5", 11.5f));
-            }
-            if (harmony.active) {
-                harmonyCard.addView(bodyText(ctx, "Текущая стойка по API: атака "
-                        + HarmonyInfo.formatMultiplier(harmony.heroBonusPct) + " · питомец "
-                        + HarmonyInfo.formatMultiplier(harmony.petBonusPct), "#A5D6A7", 12f));
-                harmonyCard.addView(bodyText(ctx, "Эти множители уже учтены в данных игры. Не применяй их повторно; — означает, что данных нет.", "#B0BEC5", 11f));
-            } else {
-                harmonyCard.addView(bodyText(ctx, "Для текущих множителей включи «Гармонию» в игре и обнови API. Сравни стойки на одном противнике.", "#B0BEC5", 11f));
-            }
-            root.addView(harmonyCard);
-        }
+        root.addView(stanceGuideCard(ctx, dash, "hero"));
 
-        // 1b. Гайд механик активного класса и эталонный Бонус дропа
         LinearLayout clsCard = makeCard(ctx, "#141D2B", "#7E57C2");
         clsCard.addView(cardTitle(ctx, hc.icon + " Профиль класса «" + hc.ruName + "» и главный Бонус дропа", "#D1C4E9"));
         clsCard.addView(bodyText(ctx, HeroClassProfile.buildClassGuide(hc, p.mode), "#EDE7F6", 12f));
@@ -636,6 +608,8 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
+        root.addView(stanceGuideCard(ctx, dash, "equipment"));
+        final boolean uncertainHarmony = "harmony".equals(StanceAdvisor.stance(dash));
         List<ApiDashboardEngine.ServerItemAudit> audits = ApiDashboardEngine.analyzeAllEquippedItems(dash, p);
         for (final ApiDashboardEngine.ServerItemAudit ia : audits) {
             if (filterKey != null && filterKey != ApiDashboardEngine.EquippedSlotKey.ALL && ia.slotKey != filterKey) {
@@ -665,8 +639,8 @@ public final class DashboardCardRenderer {
 
             // 5 визуальных строк аффиксов с прогресс-барами качества ролла
             for (ApiDashboardEngine.ServerPositionEval pe : ia.positions) {
-                LinearLayout posBox = makeCard(ctx, pe.keepStat ? "#10211B" : "#241B15",
-                        pe.keepStat ? "#2E7D32" : "#EF6C00");
+                LinearLayout posBox = makeCard(ctx, uncertainHarmony ? "#15232B" : pe.keepStat ? "#10211B" : "#241B15",
+                        uncertainHarmony ? "#546E7A" : pe.keepStat ? "#2E7D32" : "#EF6C00");
                 posBox.setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6));
 
                 LinearLayout pTop = row(ctx);
@@ -681,7 +655,9 @@ public final class DashboardCardRenderer {
                 pStat.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 pTop.addView(pStat);
 
-                if (pe.keepStat) {
+                if (uncertainHarmony) {
+                    pTop.addView(badge(ctx, "⚖ СРАВНИТЬ", "#243A42", "#B0BEC5"));
+                } else if (pe.keepStat) {
                     pTop.addView(badge(ctx, "✅ ОСТАВИТЬ", "#1B4332", "#69F0AE"));
                 } else {
                     pTop.addView(badge(ctx, String.format(Locale.US, "🔄 +%.1f%%", Math.max(0.1, pe.netUpgradePct)),
@@ -695,14 +671,14 @@ public final class DashboardCardRenderer {
                 posBox.addView(labeledProgressBar(ctx, "Качество ролла", rangeInfo, qPct,
                         qPct >= 80 ? "#4CAF50" : (qPct >= 50 ? "#29B6F6" : "#FFA726")));
 
-                if (!pe.keepStat && pe.recommendedType != null) {
+                if (!uncertainHarmony && !pe.keepStat && pe.recommendedType != null) {
                     posBox.addView(bodyText(ctx, "👉 Лучшая замена: " + pe.recommendedType.taggedName(),
                             "#FFD54F", 11.5f));
                 }
                 card.addView(posBox);
             }
 
-            if (ia.awakenAdvice != null && !ia.awakenAdvice.isEmpty()) {
+            if (!uncertainHarmony && ia.awakenAdvice != null && !ia.awakenAdvice.isEmpty()) {
                 card.addView(bodyText(ctx, ia.awakenAdvice, "#CE93D8", 11.5f));
             }
 
@@ -717,7 +693,7 @@ public final class DashboardCardRenderer {
                 }
             });
             btnRow.addView(whatIfBtn);
-            card.addView(btnRow);
+            if (!uncertainHarmony) card.addView(btnRow);
             root.addView(card);
         }
     }
@@ -821,6 +797,7 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
+        root.addView(stanceGuideCard(ctx, dash, "bag"));
 
         // 1. ПОЛНЫЙ РАЗБОР ИНВЕНТАРЯ ПРЕДМЕТОВ (/api/inventory) СТРОГО ПО БОНУСУ ДРОПА И КЛАССУ
         final BagAndPetAdvisor.InventoryAuditSummary invSum = BagAndPetAdvisor.evaluateInventoryItems(
@@ -833,7 +810,7 @@ public final class DashboardCardRenderer {
                 "🎒 Сумка предметов (" + countHdr + ") — класс «" + invSum.heroClass.ruName + "»",
                 "#81D4FA"));
         invCard.addView(bodyText(ctx,
-                "Оценка строится СТРОГО по неизменяемому Бонусу дропа (Неистовство, Удача, Компаньона, Свирепость, Убийцы и др.) без дублей и без браковки перекручиваемых аффиксов!",
+                "Оценка ориентировочная: не учитывает полный вклад предмета в баланс и DPS. Перед разбором обязательно проверь предмет и пресеты в игре.",
                 "#B0BEC5", 11.5f));
         if (!invSum.dropBonusSummaryLine.isEmpty()) {
             invCard.addView(bodyText(ctx, "📊 Бонусы дропа в сумке: " + invSum.dropBonusSummaryLine, "#FFE082", 11.5f));
@@ -1110,15 +1087,18 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
+        root.addView(stanceGuideCard(ctx, dash, "gems"));
 
         // 1. Баннер бесплатной перестановки камней (0 ресурсов!)
         List<String> swaps = ApiFeatureAnalyzers.findFreeGemSwaps(dash, p);
         LinearLayout swapCard = makeCard(ctx, swaps.isEmpty() ? "#11221B" : "#1F2612",
                 swaps.isEmpty() ? "#4CAF50" : "#C6FF00");
         swapCard.addView(cardTitle(ctx, "🔀 Бесплатная перестановка камней (0 затрат)", "#EEFF41"));
-        if (swaps.isEmpty()) {
+        if ("harmony".equals(StanceAdvisor.stance(dash))) {
+            swapCard.addView(bodyText(ctx, "Сравни перестановки вручную: старый расчёт не учитывает изменение баланса Гармонии.", "#FFE082", 12.5f));
+        } else if (swaps.isEmpty()) {
             swapCard.addView(bodyText(ctx,
-                    "✅ Все вставленные камни уже распределены между Оружием, Факелом, Бронёй и Бижутерией с максимальной отдачей!",
+                    "Перестановок по текущей эвристике не найдено. Это не доказательство оптимальности.",
                     "#A5D6A7", 12.5f));
         } else {
             for (String sw : swaps) {
@@ -1229,6 +1209,7 @@ public final class DashboardCardRenderer {
             root.addView(emptySyncCard(ctx));
             return;
         }
+        root.addView(stanceGuideCard(ctx, dash, "pets"));
 
         // 0. Глубокий оптимизатор аффиксов питомцев (Уровень + Капы + Самоцветы + Класс)
         BagAndPetAdvisor.PetDeepAdvice petAdv = BagAndPetAdvisor.analyzePetsDeep(
@@ -1250,7 +1231,7 @@ public final class DashboardCardRenderer {
                 advCard.addView(bulletLine(ctx, pAct, "#C8E6C9"));
             }
         }
-        root.addView(advCard);
+        if (!"harmony".equals(StanceAdvisor.stance(dash))) root.addView(advCard);
 
         // 1. Карточки 4 боевых питомцев
         LinearLayout petsHeader = makeCard(ctx, "#121C24", "#66BB6A");
@@ -1365,6 +1346,7 @@ public final class DashboardCardRenderer {
                                                DruidProfile p,
                                                Map<String, Object> gameCfg) {
         root.removeAllViews();
+        if (dash != null) root.addView(stanceGuideCard(ctx, dash, "skills"));
         root.addView(passiveTreeCard(ctx, dash, p, gameCfg));
         if (dash == null || p == null) {
             root.addView(emptySyncCard(ctx));
@@ -1404,6 +1386,62 @@ public final class DashboardCardRenderer {
         root.addView(journalCard);
     }
 
+    private static String stanceScenarioKey(Map<String, Object> dash) {
+        String id = SimpleJson.str(dash, "characterId", "").trim();
+        return id.isEmpty() || id.equals("0") ? "" : "character:" + id;
+    }
+
+    private static int stanceScenario(Context ctx, Map<String, Object> dash) {
+        if (!"harmony".equals(StanceAdvisor.stance(dash))) return StanceAdvisor.UNKNOWN;
+        String key = stanceScenarioKey(dash);
+        if (key.isEmpty()) return StanceAdvisor.UNKNOWN;
+        int scenario = ctx.getSharedPreferences("stance_scenarios", Context.MODE_PRIVATE).getInt(key, 0);
+        return scenario >= 0 && scenario <= 3 ? scenario : 0;
+    }
+
+    private static View stanceGuideCard(final Context ctx, final Map<String, Object> dash, final String section) {
+        final LinearLayout card = makeCard(ctx, "#11252A", "#4DB6AC");
+        card.addView(cardTitle(ctx, "⚖ Стойка и баланс сборки", "#80CBC4"));
+        final LinearLayout text = new LinearLayout(ctx);
+        text.setOrientation(LinearLayout.VERTICAL);
+        card.addView(text);
+        final String key = stanceScenarioKey(dash);
+        final int[] selected = {stanceScenario(ctx, dash)};
+        final Button scenarioButton;
+        if ("hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)) && !key.isEmpty()) {
+            scenarioButton = new Button(ctx);
+            card.addView(scenarioButton);
+        } else scenarioButton = null;
+        final Runnable update = new Runnable() {
+            @Override public void run() {
+                text.removeAllViews();
+                List<String> advice = StanceAdvisor.advice(dash, selected[0]);
+                for (int i = 0; i < advice.size(); i++) {
+                    String line = advice.get(i);
+                    boolean visible = "hero".equals(section) || i == 0
+                            || line.startsWith("Сценарий:") || line.startsWith("Предметы")
+                            || line.startsWith("Руны") || line.startsWith("Бонусы")
+                            || ("equipment".equals(section) && line.startsWith("Надетые"));
+                    if (visible) text.addView(bulletLine(ctx, line, "#E0F2F1"));
+                }
+                if (!"hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)))
+                    text.addView(bodyText(ctx, "Сценарий сравнения меняется на вкладке «Герой». Старые оценки оптимизаторов не рассчитывают баланс Гармонии.", "#FFE082", 11f));
+                if (scenarioButton != null) scenarioButton.setText("Сценарий: " + StanceAdvisor.scenarioName(selected[0]) + " (сменить)");
+                if ("hero".equals(section) && "harmony".equals(StanceAdvisor.stance(dash)) && key.isEmpty())
+                    text.addView(bodyText(ctx, "ID персонажа отсутствует — выбор сценария отключён, чтобы не переносить его на другой аккаунт.", "#FFE082", 11f));
+            }
+        };
+        if (scenarioButton != null) scenarioButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                selected[0] = (selected[0] + 1) % 4;
+                ctx.getSharedPreferences("stance_scenarios", Context.MODE_PRIVATE).edit().putInt(key, selected[0]).apply();
+                update.run();
+            }
+        });
+        update.run();
+        return card;
+    }
+
     private static View passiveTreeCard(final Context ctx, final Map<String, Object> dash,
                                         final DruidProfile p, final Map<String, Object> config) {
         LinearLayout card = makeCard(ctx, "#17221E", "#66BB6A");
@@ -1413,7 +1451,8 @@ public final class DashboardCardRenderer {
         String mode = p == null || p.mode == null ? "PUSH" : p.mode.name();
         final String activeMode = mode;
         card.addView(bodyText(ctx, "Режим: " + (p == null || p.mode == null ? "Пуш" : p.mode.title)
-                + " · Изменяется в настройках сборки. Это ориентиры, а не расчёт оптимума.", "#CFD8DC", 12f));
+                + " · Стойка: " + (StanceAdvisor.stance(dash).isEmpty() ? "неизвестна" : RuGameDictionary.stanceRu(StanceAdvisor.stance(dash)))
+                + " · Это ориентиры, а не расчёт оптимума.", "#CFD8DC", 12f));
         card.addView(bodyText(ctx, "Вложения, остаток очков, капы и доступность узлов неизвестны. "
                 + "Строки ниже — варианты для сравнения, не готовое распределение: проверь открытие и свободные места в игре. Автоматических действий нет.", "#FFE082", 12f));
         final int tierCount = PassiveTreeAdvisor.tierCount(config);
@@ -1445,7 +1484,8 @@ public final class DashboardCardRenderer {
                 next.setEnabled(tierCount > 0 && selection[1] + 1 < tierCount);
                 lines.removeAllViews();
                 int cls = selection[0] == 0 ? autoClass : selection[0];
-                for (String line : PassiveTreeAdvisor.recommendations(config, selection[1], cls, activeMode)) {
+                for (String line : PassiveTreeAdvisor.recommendations(config, selection[1], cls, activeMode,
+                        StanceAdvisor.stance(dash), stanceScenario(ctx, dash))) {
                     lines.addView(bulletLine(ctx, line, "#E8F5E9"));
                 }
             }

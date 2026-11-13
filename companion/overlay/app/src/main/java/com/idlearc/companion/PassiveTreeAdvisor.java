@@ -57,6 +57,11 @@ public final class PassiveTreeAdvisor {
     }
 
     public static List<String> recommendations(Map<String, Object> config, int tierIndex, int cls, String mode) {
+        return recommendations(config, tierIndex, cls, mode, "", StanceAdvisor.UNKNOWN);
+    }
+
+    public static List<String> recommendations(Map<String, Object> config, int tierIndex, int cls, String mode,
+                                               String stance, int scenario) {
         List<String> result = new ArrayList<>();
         if (cls < 1 || cls > 5) { result.add("Выбери класс, чтобы увидеть ориентиры."); return result; }
         Map<String, Object> tree = config == null ? null : SimpleJson.asMap(config.get("skillTree"));
@@ -73,7 +78,7 @@ public final class PassiveTreeAdvisor {
         for (int i = start; i <= end; i++) {
             Map<String, Object> row = SimpleJson.asMap(rows.get(i));
             List<Object> nodes = row == null ? null : SimpleJson.asList(row.get("nodes"));
-            Map<String, Object> best = null;
+            Map<String, Object> best = null, attackNode = null, petNode = null;
             int bestPriority = 0;
             if (nodes != null) for (Object obj : nodes) {
                 Map<String, Object> node = SimpleJson.asMap(obj);
@@ -81,23 +86,41 @@ public final class PassiveTreeAdvisor {
                 double value = SimpleJson.num(node, "per_point", Double.NaN);
                 int max = SimpleJson.intVal(node, "max_points", 0);
                 int priority = priority(stat, cls, mode);
-                if (priority > bestPriority && max > 0 && Double.isFinite(value) && value > 0) {
+                if (max <= 0 || !Double.isFinite(value) || value <= 0) continue;
+                boolean attack = stat.equals("attack_damage_flat") || stat.equals("attack_damage_percent");
+                boolean pet = stat.equals("pet_damage_flat") || stat.equals("pet_damage_percent");
+                if (attack) attackNode = node;
+                if (pet) petNode = node;
+                String target = StanceAdvisor.target(stance, scenario);
+                if (attack && target.equals("attack") || pet && target.equals("pet")) priority = 100;
+                if ("bulwark".equals(stance) && stat.equals("dodge_chance")) priority = 0;
+                if ("bulwark".equals(stance) && (stat.equals("defense") || stat.equals("defense_percent"))) priority = 95;
+                if (priority > bestPriority) {
                     best = node; bestPriority = priority;
                 }
+            }
+            if ("harmony".equals(stance) && StanceAdvisor.target(stance, scenario).isEmpty()
+                    && attackNode != null && petNode != null) {
+                result.add("Строка " + (i + 1) + ": сравни " + formatNode(attackNode) + " или " + formatNode(petNode)
+                        + " — слабая сторона неизвестна.");
+                continue;
             }
             if (best == null) {
                 result.add("Строка " + (i + 1) + ": нет известного ориентира — сравни узлы в игре.");
                 continue;
             }
-            String stat = SimpleJson.str(best, "stat", "");
-            double amount = SimpleJson.num(best, "per_point", 0);
-            int max = SimpleJson.intVal(best, "max_points", 0);
-            boolean pct = stat.endsWith("_percent") || stat.endsWith("_chance") || stat.equals("crit_damage") || stat.equals("exp_gain") || stat.equals("gold_gain");
-            String name = RuGameDictionary.statName(stat);
-            result.add("Строка " + (i + 1) + (SimpleJson.bool(row, "milestone", false) ? " · веха" : "") + ": " + name
-                    + " (" + stat + ") +" + String.format(Locale.US, "%s", amount == Math.rint(amount) ? Long.toString((long) amount) : Double.toString(amount))
-                    + (pct ? "%" : "") + "/очко · максимум узла " + max);
+            result.add("Строка " + (i + 1) + (SimpleJson.bool(row, "milestone", false) ? " · веха" : "") + ": " + formatNode(best));
         }
         return result;
+    }
+
+    private static String formatNode(Map<String, Object> best) {
+        String stat = SimpleJson.str(best, "stat", "");
+        double amount = SimpleJson.num(best, "per_point", 0);
+        int max = SimpleJson.intVal(best, "max_points", 0);
+        boolean pct = stat.endsWith("_percent") || stat.endsWith("_chance") || stat.equals("crit_damage") || stat.equals("exp_gain") || stat.equals("gold_gain");
+        return RuGameDictionary.statName(stat) + " (" + stat + ") +"
+                + (amount == Math.rint(amount) ? Long.toString((long) amount) : Double.toString(amount))
+                + (pct ? "%" : "") + "/очко · максимум узла " + max;
     }
 }

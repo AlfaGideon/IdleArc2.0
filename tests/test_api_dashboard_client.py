@@ -340,6 +340,20 @@ public class ApiClientSuite {
             if ("Амулет удачи".equals(e.itemName) && e.action == BagAndPetAdvisor.ItemBagAction.KEEP_FARM_PRESET) keptLucky = true;
         }
         check(keptFrenzy && keptLucky, "Frenzy and Lucky drop bonuses kept for preset");
+        dash.put("activeCombatStance", "harmony");
+        BagAndPetAdvisor.InventoryAuditSummary hybridBag = BagAndPetAdvisor.evaluateInventoryItems(dash, testInv, p);
+        for (BagAndPetAdvisor.BagItemEntry e : hybridBag.entries) {
+            if ("fierce".equals(e.dropBonusSlug) || "companions".equals(e.dropBonusSlug)) {
+                check(e.action != BagAndPetAdvisor.ItemBagAction.SALVAGE_DESTROY, "hybrid damage items not condemned solely by class");
+            }
+        }
+        Map<String,Object> gemData = SimpleJson.parseObject("{\\\"bag\\\":[{\\\"family\\\":\\\"jade\\\",\\\"rarity\\\":\\\"legendary\\\",\\\"quality\\\":1}]}");
+        BagAndPetAdvisor.GemBagAuditSummary safeGems = BagAndPetAdvisor.evaluateGemBag(dash, gemData, p);
+        check(safeGems.entries.size() == 1, "harmony fixture contains a gem");
+        for (BagAndPetAdvisor.BagGemEntry e : safeGems.entries) check(e.action == BagAndPetAdvisor.GemBagAction.KEEP_RESERVE, "harmony gem advice is conservative");
+        check(safeGems.salvageGemsCount == 0 && safeGems.upgradeSocketsCount == 0, "harmony gem counters avoid unjustified choices");
+        dash.remove("activeCombatStance");
+
 
         // /api/inventory returns page 1, /api/items-page/N returns a bare paginator.
         try {
@@ -689,6 +703,7 @@ public class ApiClientSuite {
                 str(tmp / "android" / "content" / "SharedPreferences.java"),
                 str(SRC_DIR / "SimpleJson.java"),
                 str(SRC_DIR / "HarmonyInfo.java"),
+                str(SRC_DIR / "StanceAdvisor.java"),
                 str(SRC_DIR / "LivePollPolicy.java"),
                 str(SRC_DIR / "LiveSections.java"),
                 str(SRC_DIR / "DruidProfile.java"),

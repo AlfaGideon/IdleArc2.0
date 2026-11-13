@@ -43,6 +43,25 @@ public class PassiveHarness {
       check(out.contains("веха"),"milestone");
       check(out.contains("максимум узла"),"max");
     }
+    String unknown = String.join("\n", PassiveTreeAdvisor.recommendations(cfg,0,5,"PUSH","harmony",StanceAdvisor.UNKNOWN));
+    check(unknown.contains("attack_damage_flat") && unknown.contains("pet_damage_flat"),"harmony unknown shows both options");
+    String heroHeavy = String.join("\n", PassiveTreeAdvisor.recommendations(cfg,0,1,"PUSH","harmony",StanceAdvisor.ATTACK_DOMINANT));
+    check(heroHeavy.contains("pet_damage_flat"),"scenario favours pet comparison");
+    String petHeavy = String.join("\n", PassiveTreeAdvisor.recommendations(cfg,0,5,"PUSH","harmony",StanceAdvisor.PET_DOMINANT));
+    check(petHeavy.contains("attack_damage_flat"),"scenario favours attack comparison");
+    check(String.join("\n", PassiveTreeAdvisor.recommendations(cfg,0,5,"PUSH","aggressive",0)).contains("attack_damage_flat"),"aggressive stance favours attack");
+    check(String.join("\n", PassiveTreeAdvisor.recommendations(cfg,0,1,"PUSH","beastmaster",0)).contains("pet_damage_flat"),"beastmaster stance favours pet");
+    Map<String,Object> h = map("{\"activeCombatStance\":\"harmony\",\"activeCombatStanceHarmonyMax\":8000,\"attackDamageBreakdown\":{\"multiplicative\":[{\"key\":\"stance\",\"pct\":6400}]},\"bonusStats\":{\"petDamageBreakdown\":[{\"key\":\"stance\",\"pct\":6400}],\"runeAttackDamagePercent\":15,\"runePetDamagePercent\":20}}");
+    String advice = String.join("\n", StanceAdvisor.advice(h, StanceAdvisor.ATTACK_DOMINANT));
+    check(advice.contains("×81.00") && advice.contains("80.0% от потолка") && advice.contains("не соотношение урона"),"bonus ratio is not damage split");
+    check(advice.contains("Бонусы рун") && advice.contains("предположение"),"source bonus and user scenario");
+    check(String.join("\n",StanceAdvisor.advice(map("{}"),0)).contains("неизвестна"),"unknown stance");
+    check(!String.join("\n",StanceAdvisor.advice(map("{\"activeCombatStance\":\"harmony\",\"activeCombatStanceHarmonyMax\":0}"),0)).contains("от потолка"),"zero cap has no ratio");
+    check(!String.join("\n",StanceAdvisor.advice(map("{\"activeCombatStance\":\"beastmaster\",\"activeCombatStanceHarmonyMax\":8000}"),0)).contains("×81.00"),"no harmony cap outside harmony");
+    Map<String,Object> defenseCfg = map("{\"skillTree\":{\"tiers\":[{\"start_row\":0,\"end_row\":0}],\"rows\":[{\"nodes\":[{\"stat\":\"dodge_chance\",\"per_point\":1,\"max_points\":1},{\"stat\":\"defense\",\"per_point\":10,\"max_points\":1}]}]}}");
+    check(String.join("\n",PassiveTreeAdvisor.recommendations(defenseCfg,0,1,"PUSH","bulwark",0)).contains("defense"),"bulwark avoids dodge");
+
+    check(String.join("\n",StanceAdvisor.advice(map("{\"activeCombatStance\":\"bulwark\"}"),0)).contains("отключает уклонение"),"bulwark advice");
     check(lines(cfg,0,5,"PUSH").contains("pet_damage_flat"),"druid pet");
     check(lines(cfg,0,1,"PUSH").contains("attack_damage_flat"),"warrior attack");
     check(lines(cfg,0,1,"LEVELING").contains("exp_gain"),"leveling milestone");
@@ -68,7 +87,7 @@ public class PassiveHarness {
             else:
                 self.skipTest("Java compiler unavailable")
             compile_run = subprocess.run(compiler + ["-encoding", "UTF-8", "-d", str(tmp),
-                                          str(source), *(str(SRC / (n + ".java")) for n in ("PassiveTreeAdvisor", "SimpleJson", "RuGameDictionary"))],
+                                          str(source), *(str(SRC / (n + ".java")) for n in ("PassiveTreeAdvisor", "StanceAdvisor", "HarmonyInfo", "SimpleJson", "RuGameDictionary"))],
                                          capture_output=True, text=True)
             self.assertEqual(compile_run.returncode, 0, compile_run.stderr)
             run = subprocess.run([java, "-cp", str(tmp), "com.idlearc.companion.PassiveHarness"], capture_output=True, text=True)
