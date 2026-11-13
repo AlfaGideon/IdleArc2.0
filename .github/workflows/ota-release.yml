@@ -120,10 +120,11 @@ jobs:
           fetch_mirror() {
             local path="$1" output="$2" attempt
             for attempt in 1 2 3 4 5; do
-              if gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > "$output"; then
+              if gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$MIRROR_SHA" -H 'Accept: application/vnd.github.raw+json' > "$output" 2> /tmp/ota-mirror-error; then
                 return 0
               fi
               echo "Mirror fetch failed for $path (attempt $attempt/5)" >&2
+              echo "::warning::$(tr '\n' ' ' < /tmp/ota-mirror-error)"
               sleep 5
             done
             echo "::error::Could not fetch mirror path $path at $MIRROR_SHA"
