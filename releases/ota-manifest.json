@@ -1,8 +1,8 @@
 {
-  "versionCode": 550,
-  "versionName": "5.5.0",
-  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.5.0/releases/IdleArcHelper-v5.5.0.apk",
-  "sha256": "3ace8ff273cab29daa2b76448ca4a0cc3b95963f411d33270a9af5050f56bb59",
-  "sizeBytes": 472185,
-  "changelog": "v5.5.0: отдельная вкладка стоек и подсветка строк для сравнения аффиксов в Гармонии. Подсветка — ориентир, а не расчёт лучшей перековки или DPS."
+  "versionCode": 560,
+  "versionName": "5.6.0",
+  "apkUrl": "https://raw.githubusercontent.com/AlfaGideon/IdleArc2.0/v5.6.0/releases/IdleArcHelper-v5.6.0.apk",
+  "sha256": "1317573f7ab42ce03bb36cf5fd34c2e8be4f4cc2c2bccc7eacd7de4932b40c33",
+  "sizeBytes": 476281,
+  "changelog": "v5.6.0: ориентиры для Оплота и возмездия, сравнение защиты на предметах; непроверенные оценки перековки для Оплота скрыты. Это не расчёт DPS."
 }
